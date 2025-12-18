@@ -1,0 +1,22 @@
+# AI / Orchestration
+langchain-groq
+langchain-community
+langgraph
+langsmith
+
+# UI
+gradio
+
+# File parsing
+pylatexenc
+tavily-python
+PyPDF2
+docx2txt
+mammoth
+
+# HTTP & scraping
+requests
+beautifulsoup4
+
+# Config management
+pydantic-settings
