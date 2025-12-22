@@ -8,6 +8,8 @@ class Settings(BaseSettings):
     tavily_api_key: str = Field(..., env="TAVILY_API_KEY")
     langsmith_api_key: str | None = Field(None, env="LANGSMITH_API_KEY")
 
+    langsmith_tracing: str = Field("true", env="LANGSMITH_TRACING")
+    langsmith_project: str = Field("ResMe-Fullstack", env="LANGSMITH_PROJECT")
     # App environment
     env: str = Field("development", env="ENV")
 

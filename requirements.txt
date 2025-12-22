@@ -5,7 +5,7 @@ langgraph
 langsmith
 
 # UI
-gradio
+gradio == 5.42.0
 
 # File parsing
 pylatexenc
