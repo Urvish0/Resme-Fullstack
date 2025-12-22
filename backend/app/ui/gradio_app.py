@@ -4,7 +4,7 @@ import tempfile
 import gradio as gr
 from typing import TypedDict, Annotated, List, Literal, Dict, Any, Optional
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, SystemMessage
-from langchain_groq import ChatGroq
+# from langchain_groq import ChatGroq
 from langchain_core.tools import tool
 from langchain_community.tools.tavily_search import TavilySearchResults
 from langgraph.graph import StateGraph, END, MessagesState
@@ -22,8 +22,9 @@ from ..core.config import settings
 from ..utils.file_parsers import extract_text_from_pdf, extract_text_from_docx, extract_text_from_doc, parse_uploaded_file
 from ..utils.text_cleaners import extract_text_from_latex, parse_markdown_to_plain_text, clean_resume_response
 from ..utils.web_scraper import get_url_content_from_tavily
+from ..core.llm import get_llm
 
-llm = ChatGroq(model="llama-3.1-8b-instant", temperature=0)
+llm = get_llm()
 
 
 class _SimpleResp:
