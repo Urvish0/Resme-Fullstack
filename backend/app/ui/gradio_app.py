@@ -9,6 +9,8 @@ from ..utils.file_parsers import extract_text_from_pdf, extract_text_from_docx, 
 
 from ..core.llm import get_llm
 from ..workflows.resume_graph import build_resume_graph
+from ..services.workflow_service import stream_resume_workflow
+
 
 llm = get_llm()
 
@@ -89,7 +91,7 @@ def run_workflow(job_description_raw: str, resume_file, resume_raw_content: str,
     thread_id = "user_session"  # In a real app, generate unique session ID
     
     messages = []
-    for s in final_workflow.stream(initial_state, {"configurable": {"thread_id": thread_id}}):
+    for s in stream_resume_workflow(initial_state, thread_id):
         for key, value in s.items():
             if key != "__end__":
                 output_state = value
@@ -403,7 +405,7 @@ def safe_enhanced_run_workflow(job_description_raw: str, resume_file, resume_raw
         
         messages.append((None, "🚀 Starting resume optimization..."))
         
-        for s in final_workflow.stream(initial_state, {"configurable": {"thread_id": thread_id}}):
+        for s in stream_resume_workflow(initial_state, thread_id):
             for key, value in s.items():
                 if key != "__end__":
                     output_state = value
