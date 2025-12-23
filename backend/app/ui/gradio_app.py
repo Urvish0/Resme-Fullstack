@@ -6,10 +6,11 @@ from datetime import datetime
 
 from ..core.config import settings
 from ..utils.file_parsers import extract_text_from_pdf, extract_text_from_docx, extract_text_from_doc, parse_uploaded_file
-
 from ..core.llm import get_llm
 from ..workflows.resume_graph import build_resume_graph
 from ..services.workflow_service import stream_resume_workflow
+from ..services.resume_service import prepare_resume_state
+
 
 
 llm = get_llm()
@@ -276,234 +277,98 @@ def create_dashboard_metrics(old_score=None, new_score=None, keywords_count=0, i
     </div>
     """
 
-def safe_enhanced_run_workflow(job_description_raw: str, resume_file, resume_raw_content: str, resume_format: str):
-    """Enhanced workflow runner with proper error handling and type checking"""
-    
-    try:
-        # Handle None values and ensure strings
-        job_description_raw = str(job_description_raw) if job_description_raw is not None else ""
-        resume_raw_content = str(resume_raw_content) if resume_raw_content is not None else ""
-        
-        # Combine file and text input for resume
-        # file_content = ""
-        # if resume_file is not None:
-        #     file_ext = os.path.splitext(resume_file.name)[-1].lower()
+def safe_enhanced_run_workflow(
+    job_description_raw,
+    resume_file,
+    resume_raw_content,
+    resume_format
+):
 
-        #     if file_ext == ".md" or file_ext == ".txt":
-        #         resume_content = resume_file.read().decode("utf-8", errors="ignore")
 
-        #     elif file_ext == ".tex":
-        #         resume_content = extract_text_from_latex(resume_file)
-
-        #     elif file_ext == ".pdf":
-        #         resume_content = extract_text_from_pdf(resume_file)
-
-        #     elif file_ext == ".docx":
-        #         resume_content = extract_text_from_docx(resume_file)
-
-        #     elif file_ext == ".doc":
-        #         resume_content = extract_text_from_doc(resume_file)
-
-        #     else:
-        #         raise ValueError(f"Unsupported file format: {file_ext}")
-        
-        file_content = ""
-        resume_content = ""
-        if resume_file is not None:
-            file_ext = os.path.splitext(resume_file.name)[-1].lower()
-            path = getattr(resume_file, "name", None)
-
-            try:
-                if file_ext in [".md", ".txt"]:
-                    # plain text / markdown
-                    with open(path, "r", encoding="utf-8", errors="ignore") as f:
-                        resume_content = f.read()
-
-                elif file_ext == ".pdf":
-                    # pass path to PDF extractor
-                    resume_content = extract_text_from_pdf(path)
-
-                elif file_ext == ".docx":
-                    resume_content = extract_text_from_docx(path)
-
-                elif file_ext == ".doc":
-                    resume_content = extract_text_from_doc(path)
-
-                else:
-                    # unsupported -> leave empty and let validation handle it
-                    with open(path, "r", encoding="utf-8", errors="ignore") as f:
-                        resume_content = f.read()
-
-            except Exception as e:
-                resume_content = ""
-                print(f"Error reading uploaded file '{getattr(resume_file, 'name', 'unknown')}': {e}")
-
-            # set file_content so later concatenation uses it
-            file_content = resume_content or ""
-        
-        
-        # Safely concatenate strings
-        final_resume_content = ""
-        if file_content and resume_raw_content:
-            final_resume_content = file_content + "\n" + resume_raw_content
-        elif file_content:
-            final_resume_content = file_content
-        elif resume_raw_content:
-            final_resume_content = resume_raw_content
-        
-        # Validation
-        if not job_description_raw.strip():
-            return (
-                _normalize_chat_messages([(None, "❌ Please provide a job description.")]), 
-                "Please enter a job description to continue.",
-                "Please provide job details first.",
-                gr.update(visible=False),
-                gr.update(visible=False),
-                create_dashboard_metrics(),
-                get_status_message("🔴 Waiting for job description")
-            )
-        
-        if not final_resume_content.strip():
-            return (
-                _normalize_chat_messages([(None, "❌ Please provide your resume content.")]), 
-                "Please upload or paste your resume content.",
-                "Please provide your resume first.", 
-                gr.update(visible=False),
-                gr.update(visible=False),
-                create_dashboard_metrics(),
-                get_status_message("🔴 Waiting for resume content")
-            )
-        
-        # Initialize state with safe defaults
-        initial_state = {
-            "messages": [HumanMessage(content="Optimize my resume!")],
-            "job_description_raw": job_description_raw,
-            "resume_raw_content": final_resume_content,
-            "resume_format": resume_format or "markdown",
-            "job_description_text": "",
-            "resume_plain_text": "",
-            "extracted_keywords": [],
-            "analysis_report": "",
-            "edited_resume_content": "",
-            "human_feedback": "proceed",
-            "next_agent": "",
-            "task_complete": False,
-            "current_task": "",
-            "old_ats_score": None,
-            "new_ats_score": None,
-            "cover_letter_text": "",
-            "cover_letter_markdown": ""
-        }
-        
-        # Run workflow
-        output_state = None
-        thread_id = f"session_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-        
-        messages = []
-        step_counter = 0
-        current_status = get_status_message("🟡 Processing...")
-        
-        messages.append((None, "🚀 Starting resume optimization..."))
-        
-        for s in stream_resume_workflow(initial_state, thread_id):
-            for key, value in s.items():
-                if key != "__end__":
-                    output_state = value
-                    step_counter += 1
-                    
-                    # Update current task
-                    current_task = value.get("current_task", "Processing...")
-                    current_status = get_status_message(f"🟡 Step {step_counter}: {current_task}")
-                    messages.append((None, f"✓ {current_task}"))
-                    
-                    # Add relevant system messages
-                    if "messages" in value and len(value["messages"]) > len(initial_state["messages"]):
-                        new_msgs = value["messages"][len(initial_state["messages"]):]
-                        for msg in new_msgs:
-                            if isinstance(msg, AIMessage):
-                                if "Node:" in msg.content and " - " in msg.content:
-                                    clean_msg = msg.content.split(" - ")[-1]
-                                    if not clean_msg.startswith("Sub-task:"):
-                                        messages.append((None, f"📋 {clean_msg}"))
-                            initial_state["messages"] = value["messages"]
-        
-        # Process final output
-        if output_state and output_state.get("task_complete"):
-            optimized_resume = output_state.get("edited_resume_content", "No resume generated")
-            cover_letter = output_state.get("cover_letter_text", "")
-            old_score = output_state.get("old_ats_score")
-            new_score = output_state.get("new_ats_score")
-            keywords_count = len(output_state.get("extracted_keywords", []))
-            
-            # Calculate improvement
-            improvement = 0
-            if old_score is not None and new_score is not None:
-                improvement = new_score - old_score
-            
-            # Add success message
-            messages.append((None, "🎉 **Optimization Complete!**"))
-            current_status = get_status_message("🟢 Optimization completed successfully!")
-            
-            if improvement > 0:
-                messages.append((None, f"📈 Your ATS score improved by **{improvement}%**"))
-            elif old_score and new_score:
-                messages.append((None, f"📊 ATS analysis complete (Score: {new_score}%)"))
-            
-            # Save files
-            resume_file_path = None
-            cover_letter_path = None
-            
-            try:
-                if optimized_resume and optimized_resume != "No resume generated":
-                    with tempfile.NamedTemporaryFile(mode='w', suffix='.md', delete=False, encoding='utf-8') as f:
-                        f.write(optimized_resume)
-                        resume_file_path = f.name
-                
-                if cover_letter and cover_letter.strip():
-                    with tempfile.NamedTemporaryFile(mode='w', suffix='.md', delete=False, encoding='utf-8') as f:
-                        f.write(cover_letter)
-                        cover_letter_path = f.name
-                        
-            except Exception as e:
-                messages.append((None, f"⚠️ Files generated but download may not work: {str(e)}"))
-            
-            # Create dashboard metrics
-            metrics_html = create_dashboard_metrics(old_score, new_score, keywords_count, improvement)
-            
-            return (
-                _normalize_chat_messages(messages),
-                optimized_resume,
-                cover_letter or "Cover letter will be generated with your resume optimization.",
-                gr.update(visible=bool(resume_file_path)),
-                gr.update(visible=bool(cover_letter_path)),
-                metrics_html,
-                current_status
-            )
-        
-        else:
-            current_status = get_status_message("🔴 Optimization failed")
-            return (
-                _normalize_chat_messages(messages + [(None, "❌ Optimization completed but no output was generated.")]),
-                "The optimization process completed but didn't generate output. Please try again with different content.",
-                "No cover letter was generated.",
-                gr.update(visible=False),
-                gr.update(visible=False),
-                create_dashboard_metrics(),
-                current_status
-            )
-            
-    except Exception as e:
-        error_msg = str(e)
-        current_status = get_status_message(f"🔴 Error: {error_msg}")
+    # ---- helper for guaranteed return shape ----
+    def _fail(message: str):
         return (
-            _normalize_chat_messages([(None, f"❌ An error occurred: {error_msg}")]),
-            f"An error occurred during optimization: {error_msg}",
-            "Cover letter generation failed due to an error.",
+            _normalize_chat_messages([(None, f"❌ {message}")]),
+            "",
+            "",
             gr.update(visible=False),
             gr.update(visible=False),
             create_dashboard_metrics(),
-            current_status
+            get_status_message("🔴 Failed")
         )
+
+    # ---- STEP 1: Prepare initial state via service ----
+    try:
+        initial_state = prepare_resume_state(
+            job_description_raw=job_description_raw,
+            resume_file=resume_file,
+            resume_raw_content=resume_raw_content,
+            resume_format=resume_format
+        )
+    except ValueError as e:
+        return _fail(str(e))
+    except Exception as e:
+        return _fail("Failed to prepare resume data.")
+
+    # ---- STEP 2: Run streaming workflow via service ----
+    messages = []
+    output_state = None
+    thread_id = f"session_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+
+    messages.append((None, "🚀 Starting resume optimization..."))
+
+    try:
+        for event in stream_resume_workflow(initial_state, thread_id):
+            for key, state in event.items():
+                if key == "__end__":
+                    continue
+
+                output_state = state
+
+                for msg in state.get("messages", []):
+                    if isinstance(msg, AIMessage):
+                        messages.append((None, msg.content))
+
+    except Exception as e:
+        return _fail("Workflow execution failed.")
+
+    # ---- STEP 3: Validate final state ----
+    if not output_state:
+        return _fail("Workflow completed but produced no output.")
+
+    # ---- STEP 4: Extract outputs ----
+    optimized_resume = output_state.get("edited_resume_content", "")
+    cover_letter = output_state.get("cover_letter_text", "")
+
+    old_score = output_state.get("old_ats_score")
+    new_score = output_state.get("new_ats_score")
+    keywords = output_state.get("extracted_keywords", [])
+
+    improvement = (
+        new_score - old_score
+        if old_score is not None and new_score is not None
+        else 0
+    )
+
+    metrics_html = create_dashboard_metrics(
+        old_score=old_score,
+        new_score=new_score,
+        keywords_count=len(keywords),
+        improvement=improvement
+    )
+
+    # ---- STEP 5: FINAL GUARANTEED RETURN (7 outputs) ----
+    return (
+        _normalize_chat_messages(messages),
+        optimized_resume or "No optimized resume generated.",
+        cover_letter or "Cover letter not generated.",
+        gr.update(visible=bool(optimized_resume)),
+        gr.update(visible=bool(cover_letter)),
+        metrics_html,
+        get_status_message("🟢 Optimization completed")
+    )
+
+
    
 def get_status_message(status):
     """Get styled status message"""
