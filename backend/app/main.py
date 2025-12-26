@@ -1,4 +1,8 @@
+from backend import app
 from .ui.gradio_app import demo
+from .api.routes import resume
+
+app.include_router(resume.router)
 
 def main():
     print("\n" + "="*50)
