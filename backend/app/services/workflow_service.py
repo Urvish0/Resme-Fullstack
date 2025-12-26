@@ -2,9 +2,13 @@ from asyncio.log import logger
 from typing import Dict, Any, Generator
 import json
 import hashlib
+from redis.exceptions import RedisError
+import logging
 from ..workflows.resume_graph import build_resume_graph
 from ..utils.fingerprint import make_request_fingerprint
 from ..core.redis import redis_client
+
+logger = logging.getLogger(__name__)
 
 CACHE_VERSION = "v2"
 CACHE_TTL_SECONDS = 60 * 60  # 1 hour
@@ -13,7 +17,6 @@ def make_cache_key(initial_state: dict) -> str:
     payload = json.dumps(initial_state, sort_keys=True)
     digest = hashlib.sha256(payload.encode()).hexdigest()
     return f"resume:optimize:{CACHE_VERSION}:{digest}"
-
 
 def collect_final_result(graph, initial_state: dict) -> dict:
     """
@@ -63,20 +66,26 @@ def run_resume_workflow(initial_state: dict) -> dict:
     cache_key = make_cache_key(initial_state)
 
     # 1️⃣ Try cache
-    cached = redis_client.get(cache_key)
-    if cached:
-        return json.loads(cached)
+    try: 
+        cached = redis_client.get(cache_key)
+        if cached:
+            return json.loads(cached)
+    except RedisError as e:
+        logger.warning(f"Redis GET failed, bypassing cache: {str(e)}")
 
     # 2️⃣ Run workflow
     graph = build_resume_graph()
     result = collect_final_result(graph, initial_state)
 
     # 3️⃣ Store in cache
-    redis_client.setex(
-        cache_key,
-        CACHE_TTL_SECONDS,
-        json.dumps(result)
-    )
+    try: 
+        redis_client.setex(
+            cache_key,
+            CACHE_TTL_SECONDS,
+            json.dumps(result)
+        )
+    except RedisError as e:
+        logger.warning(f"Redis SET failed, bypassing cache: {str(e)}")
 
     return result
 
