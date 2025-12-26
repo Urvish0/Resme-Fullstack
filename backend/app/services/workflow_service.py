@@ -6,12 +6,13 @@ from ..workflows.resume_graph import build_resume_graph
 from ..utils.fingerprint import make_request_fingerprint
 from ..core.redis import redis_client
 
+CACHE_VERSION = "v2"
 CACHE_TTL_SECONDS = 60 * 60  # 1 hour
 
 def make_cache_key(initial_state: dict) -> str:
     payload = json.dumps(initial_state, sort_keys=True)
     digest = hashlib.sha256(payload.encode()).hexdigest()
-    return f"resume:optimize:{digest}"
+    return f"resume:optimize:{CACHE_VERSION}:{digest}"
 
 
 def collect_final_result(graph, initial_state: dict) -> dict:
