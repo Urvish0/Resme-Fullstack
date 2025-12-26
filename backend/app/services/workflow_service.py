@@ -13,6 +13,17 @@ logger = logging.getLogger(__name__)
 CACHE_VERSION = "v2"
 CACHE_TTL_SECONDS = 60 * 60  # 1 hour
 
+MAX_RESUME_CHARS = 6000 
+MAX_JD_CHARS = 6000
+
+def trim_text(text: str, max_chars: int) -> str:
+    """
+    Safely trim text without breaking structure.
+    """
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars] + "\n\n[TRUNCATED]"
+
 def make_cache_key(initial_state: dict) -> str:
     payload = json.dumps(initial_state, sort_keys=True)
     digest = hashlib.sha256(payload.encode()).hexdigest()
@@ -63,6 +74,17 @@ def collect_final_result(graph, initial_state: dict) -> dict:
     return final_result
 
 def run_resume_workflow(initial_state: dict) -> dict:
+    
+    initial_state["resume_raw_content"] = trim_text(
+        initial_state["resume_raw_content"],
+        MAX_RESUME_CHARS
+    )
+
+    initial_state["job_description_raw"] = trim_text(
+        initial_state["job_description_raw"],
+        MAX_JD_CHARS
+    )
+
     cache_key = make_cache_key(initial_state)
 
     # 1️⃣ Try cache
