@@ -8,7 +8,9 @@ from ..workflows.resume_graph import build_resume_graph
 from ..utils.fingerprint import make_request_fingerprint
 from ..core.redis import redis_client
 
+
 logger = logging.getLogger(__name__)
+logger.info("Workflow Service initialized.")
 
 CACHE_VERSION = "v2"
 CACHE_TTL_SECONDS = 60 * 60  # 1 hour

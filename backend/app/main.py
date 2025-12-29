@@ -1,6 +1,9 @@
 from backend import app
 from .ui.gradio_app import demo
 from .api.routes import resume
+from .core.logging import setup_logging
+
+setup_logging()
 
 app.include_router(resume.router)
 

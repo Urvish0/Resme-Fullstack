@@ -1,6 +1,10 @@
 import hashlib
 import json
 from ..core.redis import redis_client
+# import logging 
+
+# logger = logging.getLogger(__name__)
+# logger.info("Cache hit")
 
 CACHE_TTL = 60 * 60
 
