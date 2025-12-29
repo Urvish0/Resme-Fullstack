@@ -77,6 +77,8 @@ def collect_final_result(graph, initial_state: dict) -> dict:
 
 def run_resume_workflow(initial_state: dict) -> dict:
     
+    logger.info("[WORKFLOW] Started")
+    
     initial_state["resume_raw_content"] = trim_text(
         initial_state["resume_raw_content"],
         MAX_RESUME_CHARS
@@ -93,10 +95,12 @@ def run_resume_workflow(initial_state: dict) -> dict:
     try: 
         cached = redis_client.get(cache_key)
         if cached:
+            logger.info("[CACHE] Hit — returning cached result")
             return json.loads(cached)
     except RedisError as e:
         logger.warning(f"Redis GET failed, bypassing cache: {str(e)}")
 
+    logger.info("[CACHE] Miss — running workflow")
     # 2️⃣ Run workflow
     graph = build_resume_graph()
     result = collect_final_result(graph, initial_state)
@@ -108,9 +112,11 @@ def run_resume_workflow(initial_state: dict) -> dict:
             CACHE_TTL_SECONDS,
             json.dumps(result)
         )
+        logger.info("[CACHE] Stored result")
     except RedisError as e:
         logger.warning(f"Redis SET failed, bypassing cache: {str(e)}")
 
+    logger.info("[WORKFLOW] Completed")
     return result
 
 def stream_resume_workflow(
@@ -118,6 +124,8 @@ def stream_resume_workflow(
     thread_id: str
 ) -> Generator[Dict[str, Any], None, None]:
 
+    logger.info("[STREAM_WORKFLOW] Started")
+    
     # 1. Generate fingerprint for caching
     fingerprint = make_request_fingerprint({
         "job_description": initial_state.get("job_description_raw"),
@@ -166,7 +174,10 @@ def stream_resume_workflow(
                 60 * 60, # 1 hr TTL
                 json.dumps(final_result)
             )
+            logger.info("[CACHE] Saved final result")
 
     except Exception as e:
         raise RuntimeError(f"Workflow streaming failed: {str(e)}")
+
+    logger.info("[STREAM_WORKFLOW] Completed")
 

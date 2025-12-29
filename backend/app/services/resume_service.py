@@ -1,4 +1,5 @@
 import os
+import logging
 from typing import Dict, Any
 from langchain_core.messages import HumanMessage
 
@@ -7,6 +8,8 @@ from ..utils.file_parsers import (
     extract_text_from_docx,
     extract_text_from_doc
 )
+
+logger = logging.getLogger(__name__)
  
 def prepare_resume_state(
     job_description_raw: str,
@@ -19,6 +22,8 @@ def prepare_resume_state(
     UI must never build workflow state directly.
     """
 
+    logger.info("[RESUME_SERVICE] Preparing resume state")
+    
     if not job_description_raw or not job_description_raw.strip():
         raise ValueError("Job description is required")
 
@@ -53,6 +58,8 @@ def prepare_resume_state(
     if not final_resume_content.strip():
         raise ValueError("Resume content is required")
 
+    logger.info("[RESUME_SERVICE] State prepared successfully")
+    
     return {
         "messages": [HumanMessage(content="Optimize my resume!")],
         "job_description_raw": job_description_raw,

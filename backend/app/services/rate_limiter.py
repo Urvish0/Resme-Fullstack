@@ -1,6 +1,9 @@
 import time
+import logging
 from redis.exceptions import RedisError
 from ..core.redis import redis_client
+
+logger = logging.getLogger(__name__)
 
 # Configuration
 RATE_LIMIT = 5
@@ -11,6 +14,8 @@ def is_rate_limited(client_id: str) -> bool:
     Uses a Sliding Window algorithm via Redis Sorted Sets.
     Returns True if the client has exceeded the limit.
     """
+    logger.info(f"[RATE_LIMIT] Checking for client: {client_id}")
+    
     key = f"rate_limit:{client_id}"
     now = time.time() 
     # The start of our window (60 seconds ago)
@@ -39,8 +44,14 @@ def is_rate_limited(client_id: str) -> bool:
         # The 3rd command in the pipe (index 2) was ZCARD
         request_count = results[2]
 
-        return request_count > RATE_LIMIT
+        if request_count > RATE_LIMIT:
+            logger.warning(f"[RATE_LIMIT] Exceeded for client {client_id}: {request_count}/{RATE_LIMIT}")
+            return True
+        else:
+            logger.info(f"[RATE_LIMIT] Allowed for client {client_id}: {request_count}/{RATE_LIMIT}")
+            return False
 
     except RedisError:
         # Fail open: if Redis is down, let the request through
+        logger.warning("[RATE_LIMIT] Redis error, failing open")
         return False

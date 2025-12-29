@@ -1,10 +1,9 @@
 import hashlib
 import json
+import logging
 from ..core.redis import redis_client
-# import logging 
 
-# logger = logging.getLogger(__name__)
-# logger.info("Cache hit")
+logger = logging.getLogger(__name__)
 
 CACHE_TTL = 60 * 60
 
@@ -19,7 +18,9 @@ def make_cache_key(payload: dict) -> str:
 def get_cached_result(key: str):
     data = redis_client.get(key)
     if data:
+        logger.info(f"[CACHE] Hit for key: {key}")
         return json.loads(data)
+    logger.info(f"[CACHE] Miss for key: {key}")
     return None
 
 def set_cached_result(key: str, value: dict):
@@ -28,3 +29,4 @@ def set_cached_result(key: str, value: dict):
         CACHE_TTL, 
         json.dumps(value)
     )
+    logger.info(f"[CACHE] Set for key: {key}")

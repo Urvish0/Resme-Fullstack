@@ -1,6 +1,7 @@
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 import json
+import logging
 
 from ...schemas.resume import (
     ResumeOptimizeRequest,
@@ -20,6 +21,7 @@ from ...utils.cache import (
     set_cached_result,
 )
 
+logger = logging.getLogger(__name__)
 
 MODEL_NAME = "llama-3.1-8b-instant"
 LIMITS = MODEL_LIMITS[MODEL_NAME]
@@ -30,9 +32,12 @@ router = APIRouter(prefix="/optimize", tags=["Resume"])
 @router.post("", response_model=ResumeOptimizeResponse)
 def optimize_resume(payload: ResumeOptimizeRequest, request: Request):
     
+    logger.info("[API] Optimize resume request started")
+    
     client_ip = request.client.host
 
     if is_rate_limited(client_ip):
+        logger.warning(f"[API] Rate limit exceeded for IP: {client_ip}")
         raise HTTPException(
             status_code=429,
             detail="Too many requests. Please try again later."
@@ -47,6 +52,7 @@ def optimize_resume(payload: ResumeOptimizeRequest, request: Request):
     cache_key = make_cache_key(cache_payload)
     cached = get_cached_result(cache_key)
     if cached:
+        logger.info("[API] Returning cached result")
         return cached
 
     job_description = enforce_token_limit(
@@ -77,14 +83,18 @@ def optimize_resume(payload: ResumeOptimizeRequest, request: Request):
 
     set_cached_result(cache_key, response.model_dump())
     
+    logger.info("[API] Optimize resume request completed")
     return response
 
 @router.post("/stream") #For SSE streaming (server sent event)
 def optimize_resume_stream(payload: ResumeOptimizeRequest, request: Request):
 
+    logger.info("[API] Stream optimize resume request started")
+    
     client_ip = request.client.host
     
     if is_rate_limited(client_ip):
+        logger.warning(f"[API] Stream rate limit exceeded for IP: {client_ip}")
         raise HTTPException(
             status_code=429,
             detail="Too many requests. Please try again later."
@@ -112,6 +122,7 @@ def optimize_resume_stream(payload: ResumeOptimizeRequest, request: Request):
         except Exception as e:
             yield f"data: {json.dumps({'error': str(e)})}\n\n"
 
+    logger.info("[API] Stream optimize resume request completed")
     return StreamingResponse(
         event_generator(),
         media_type="text/event-stream"

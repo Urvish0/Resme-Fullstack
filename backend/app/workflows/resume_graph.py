@@ -1,4 +1,5 @@
 import re
+import logging
 from typing import TypedDict, Annotated, List, Literal, Optional
 
 from langchain_core.messages import (
@@ -19,6 +20,9 @@ from ..utils.text_cleaners import (
 )
 from ..utils.web_scraper import get_url_content_from_tavily
 from ..utils.token_utils import estimate_tokens
+
+logger = logging.getLogger(__name__)
+logger.info("Resume Graph initialized.")
 
 llm = get_llm()
 
@@ -180,7 +184,9 @@ def keyword_extraction_node(state: ResumeOptimizationState) -> ResumeOptimizatio
         "Keywords (comma-separated):"
     )
     messages.append(AIMessage(content=f"Sub-task: Sending prompt to LLM for keyword extraction. Prompt snippet: '{prompt[:100]}...'").model_dump())
+    logger.info("[LLM] Call started: keyword_extraction")
     response = _safe_invoke(llm, prompt)
+    logger.info("[LLM] Call completed: keyword_extraction")
     keywords = [kw.strip() for kw in response.content.split(',') if kw.strip()]
 
     messages.append(AIMessage(content=f"Sub-task: LLM extracted keywords: {', '.join(keywords)}").model_dump())
@@ -224,7 +230,9 @@ def resume_analysis_node(state: ResumeOptimizationState) -> ResumeOptimizationSt
         "Analysis Report:"
     )
     messages.append(AIMessage(content=f"Sub-task: Sending prompt to LLM for initial resume analysis. Prompt snippet: '{prompt[:100]}...'").model_dump())
+    logger.info("[LLM] Call started: resume_analysis")
     response = _safe_invoke(llm, prompt)
+    logger.info("[LLM] Call completed: resume_analysis")
     analysis_report = response.content
 
     score_match = re.search(r"ATS Score:\s*(\d+)%", analysis_report)
@@ -318,8 +326,10 @@ Improved Resume:"""
 
     messages.append(AIMessage(content="Sub-task: Sending enhanced prompt to LLM for professional rewriting.").model_dump())
     
+    logger.info("[LLM] Call started: resume_editing")
     try:
         response = _safe_invoke(llm, editing_instructions)
+        logger.info("[LLM] Call completed: resume_editing")
         raw_response = response.content.strip()
         
         # Debug output
@@ -421,7 +431,9 @@ def final_ats_analysis_node(state: ResumeOptimizationState) -> ResumeOptimizatio
         "Analysis of Optimized Resume:"
     )
     messages.append(AIMessage(content=f"Sub-task: Sending prompt to LLM for final ATS score. Prompt snippet: '{prompt[:100]}...'").model_dump())
+    logger.info("[LLM] Call started: final_ats_analysis")
     response = _safe_invoke(llm, prompt)
+    logger.info("[LLM] Call completed: final_ats_analysis")
     new_analysis_summary = response.content
 
     score_match = re.search(r"ATS Score:\s*(\d+)%", new_analysis_summary)
@@ -515,7 +527,9 @@ def cover_letter_analysis_node(state: ResumeOptimizationState) -> ResumeOptimiza
         f"Resume Content:\n{resume_text}"
     )
     
+    logger.info("[LLM] Call started: cover_letter_analysis")
     response = _safe_invoke(llm, prompt)
+    logger.info("[LLM] Call completed: cover_letter_analysis")
     analysis = response.content
     return {
         **state,
@@ -552,7 +566,9 @@ def cover_letter_generation_node(state: ResumeOptimizationState) -> ResumeOptimi
         "Generated Cover Letter (markdown format):\n"
     )
     
+    logger.info("[LLM] Call started: cover_letter_generation")
     response = _safe_invoke(llm, prompt)
+    logger.info("[LLM] Call completed: cover_letter_generation")
     cover_letter_md = response.content
     
     # Save to file
