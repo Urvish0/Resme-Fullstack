@@ -21,6 +21,7 @@ from ...utils.cache import (
     set_cached_result,
 )
 from ...utils.timing import Timer 
+from ...core.exceptions import SystemFailure
 
 
 
@@ -80,7 +81,14 @@ with Timer("total_request"):
         }
         
         with Timer("workflow_execution"):
-            result = run_resume_workflow(initial_state)
+            try:
+                result = run_resume_workflow(initial_state)
+            except Exception as e:
+                logger.exception("[WORKFLOW] Failed")
+                raise SystemFailure(
+                    message="Resume optimization workflow failed",
+                    details={"***REASON***": str(e)}
+                )
 
         response = ResumeOptimizeResponse(
             optimized_resume=result.get("edited_resume_content", ""),

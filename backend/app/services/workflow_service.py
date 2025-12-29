@@ -7,6 +7,7 @@ import logging
 from ..workflows.resume_graph import build_resume_graph
 from ..utils.fingerprint import make_request_fingerprint
 from ..core.redis import redis_client
+from ..core.exceptions import SystemFailure, RetryableFailure
 
 
 logger = logging.getLogger(__name__)
@@ -102,8 +103,15 @@ def run_resume_workflow(initial_state: dict) -> dict:
 
     logger.info("[CACHE] Miss — running workflow")
     # 2️⃣ Run workflow
-    graph = build_resume_graph()
-    result = collect_final_result(graph, initial_state)
+    try:
+        graph = build_resume_graph()
+        result = collect_final_result(graph, initial_state)
+    except Exception as e:
+        logger.error("[WORKFLOW] Graph execution failed", extra={"error_type": "system_error"})
+        raise SystemFailure(
+            message="Workflow execution failed",
+            details={"reason": str(e)}
+        )
 
     # 3️⃣ Store in cache
     try: 
@@ -114,7 +122,8 @@ def run_resume_workflow(initial_state: dict) -> dict:
         )
         logger.info("[CACHE] Stored result")
     except RedisError as e:
-        logger.warning(f"Redis SET failed, bypassing cache: {str(e)}")
+        logger.warning("[CACHE] Redis SET failed, bypassing cache", extra={"error_type": "retryable_error"})
+        # Don't raise, just log
 
     logger.info("[WORKFLOW] Completed")
     return result
@@ -154,7 +163,15 @@ def stream_resume_workflow(
         }
 
     # 3. Running the workflow if cache miss
-    graph = build_resume_graph()
+    try:
+        graph = build_resume_graph()
+    except Exception as e:
+        logger.error("[STREAM_WORKFLOW] Graph build failed", extra={"error_type": "system_error"})
+        raise SystemFailure(
+            message="Workflow initialization failed",
+            details={"reason": str(e)}
+        )
+    
     final_result = None
 
     try:
@@ -177,7 +194,11 @@ def stream_resume_workflow(
             logger.info("[CACHE] Saved final result")
 
     except Exception as e:
-        raise RuntimeError(f"Workflow streaming failed: {str(e)}")
+        logger.exception("[STREAM_WORKFLOW] Streaming failed", extra={"error_type": "system_error"})
+        raise SystemFailure(
+            message="Workflow streaming failed",
+            details={"reason": str(e)}
+        )
 
     logger.info("[STREAM_WORKFLOW] Completed")
 

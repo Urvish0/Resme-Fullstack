@@ -8,6 +8,7 @@ from ..utils.file_parsers import (
     extract_text_from_docx,
     extract_text_from_doc
 )
+from ..core.exceptions import UserInputError, SystemFailure
 
 logger = logging.getLogger(__name__)
  
@@ -25,7 +26,8 @@ def prepare_resume_state(
     logger.info("[RESUME_SERVICE] Preparing resume state")
     
     if not job_description_raw or not job_description_raw.strip():
-        raise ValueError("Job description is required")
+        logger.warning("[RESUME_SERVICE] Job description is required", extra={"error_type": "user_error"})
+        raise UserInputError("Job description is required")
 
     final_resume_content = ""
 
@@ -34,18 +36,25 @@ def prepare_resume_state(
         path = getattr(resume_file, "name", None)
         ext = os.path.splitext(path)[-1].lower()
 
-        if ext in [".md", ".txt"]:
-            with open(path, "r", encoding="utf-8", errors="ignore") as f:
-                final_resume_content = f.read()
+        try:
+            if ext in [".md", ".txt"]:
+                with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                    final_resume_content = f.read()
 
-        elif ext == ".pdf":
-            final_resume_content = extract_text_from_pdf(path)
+            elif ext == ".pdf":
+                final_resume_content = extract_text_from_pdf(path)
 
-        elif ext == ".docx":
-            final_resume_content = extract_text_from_docx(path)
+            elif ext == ".docx":
+                final_resume_content = extract_text_from_docx(path)
 
-        elif ext == ".doc":
-            final_resume_content = extract_text_from_doc(path)
+            elif ext == ".doc":
+                final_resume_content = extract_text_from_doc(path)
+        except Exception as e:
+            logger.exception("[RESUME_SERVICE] File parsing failed", extra={"error_type": "system_error"})
+            raise SystemFailure(
+                message="Resume file parsing failed",
+                details={"reason": str(e)}
+            )
 
     # Append pasted resume content
     if resume_raw_content and resume_raw_content.strip():
@@ -56,7 +65,8 @@ def prepare_resume_state(
         )
 
     if not final_resume_content.strip():
-        raise ValueError("Resume content is required")
+        logger.warning("[RESUME_SERVICE] Resume content is required", extra={"error_type": "user_error"})
+        raise UserInputError("Resume content is required")
 
     logger.info("[RESUME_SERVICE] State prepared successfully")
     

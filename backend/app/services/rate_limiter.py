@@ -53,5 +53,5 @@ def is_rate_limited(client_id: str) -> bool:
 
     except RedisError:
         # Fail open: if Redis is down, let the request through
-        logger.warning("[RATE_LIMIT] Redis error, failing open")
+        logger.warning("[RATE_LIMIT] Redis error, failing open", extra={"error_type": "retryable_error"})
         return False

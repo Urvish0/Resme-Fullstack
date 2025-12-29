@@ -21,6 +21,7 @@ from ..utils.text_cleaners import (
 from ..utils.web_scraper import get_url_content_from_tavily
 from ..utils.token_utils import estimate_tokens
 from ..utils.timing import Timer
+from ..core.exceptions import SystemFailure
 
 logger = logging.getLogger(__name__)
 logger.info("Resume Graph initialized.")
@@ -186,8 +187,15 @@ def keyword_extraction_node(state: ResumeOptimizationState) -> ResumeOptimizatio
     )
     messages.append(AIMessage(content=f"Sub-task: Sending prompt to LLM for keyword extraction. Prompt snippet: '{prompt[:100]}...'").model_dump())
     logger.info("[LLM] Call started: keyword_extraction")
-    with Timer("llm_invoke for keyword_extraction"):
-        response = _safe_invoke(llm, prompt)
+    try:
+        with Timer("llm_invoke for keyword_extraction"):
+            response = _safe_invoke(llm, prompt)
+    except Exception as e:
+        logger.exception("[LLM] Call failed: keyword_extraction", extra={"error_type": "system_error"})
+        raise SystemFailure(
+            message="Keyword extraction failed",
+            details={"reason": str(e)}
+        )
     logger.info("[LLM] Call completed: keyword_extraction")
     keywords = [kw.strip() for kw in response.content.split(',') if kw.strip()]
 
@@ -233,8 +241,15 @@ def resume_analysis_node(state: ResumeOptimizationState) -> ResumeOptimizationSt
     )
     messages.append(AIMessage(content=f"Sub-task: Sending prompt to LLM for initial resume analysis. Prompt snippet: '{prompt[:100]}...'").model_dump())
     logger.info("[LLM] Call started: resume_analysis")
-    with Timer("llm_invoke for resume_analysis"):
-        response = _safe_invoke(llm, prompt)
+    try:
+        with Timer("llm_invoke for resume_analysis"):
+            response = _safe_invoke(llm, prompt)
+    except Exception as e:
+        logger.exception("[LLM] Call failed: resume_analysis", extra={"error_type": "system_error"})
+        raise SystemFailure(
+            message="Resume analysis failed",
+            details={"reason": str(e)}
+        )
     logger.info("[LLM] Call completed: resume_analysis")
     analysis_report = response.content
 
@@ -359,9 +374,11 @@ Improved Resume:"""
             edited_resume = resume_text  # Fallback to original
             
     except Exception as e:
-        print(f"ERROR in resume editing: {e}")
-        edited_resume = resume_text  # Fallback to original
-        messages.append(AIMessage(content=f"Error in LLM call: {e}. Using original resume.").model_dump())
+        logger.exception("[LLM] Call failed: resume_editing", extra={"error_type": "system_error"})
+        raise SystemFailure(
+            message="Resume editing failed",
+            details={"reason": str(e)}
+        )
     
     # Post-processing to ensure no hallucinations were added
     # Commenting out for now as it might be too aggressive
@@ -436,8 +453,15 @@ def final_ats_analysis_node(state: ResumeOptimizationState) -> ResumeOptimizatio
     )
     messages.append(AIMessage(content=f"Sub-task: Sending prompt to LLM for final ATS score. Prompt snippet: '{prompt[:100]}...'").model_dump())
     logger.info("[LLM] Call started: final_ats_analysis")
-    with Timer("llm_invoke for final_ats_analysis"):
-        response = _safe_invoke(llm, prompt)
+    try:
+        with Timer("llm_invoke for final_ats_analysis"):
+            response = _safe_invoke(llm, prompt)
+    except Exception as e:
+        logger.exception("[LLM] Call failed: final_ats_analysis", extra={"error_type": "system_error"})
+        raise SystemFailure(
+            message="Final ATS analysis failed",
+            details={"reason": str(e)}
+        )
     logger.info("[LLM] Call completed: final_ats_analysis")
     new_analysis_summary = response.content
 
@@ -533,8 +557,15 @@ def cover_letter_analysis_node(state: ResumeOptimizationState) -> ResumeOptimiza
     )
     
     logger.info("[LLM] Call started: cover_letter_analysis")
-    with Timer("llm_invoke for cover_letter_analysis"):
-        response = _safe_invoke(llm, prompt)
+    try:
+        with Timer("llm_invoke for cover_letter_analysis"):
+            response = _safe_invoke(llm, prompt)
+    except Exception as e:
+        logger.exception("[LLM] Call failed: cover_letter_analysis", extra={"error_type": "system_error"})
+        raise SystemFailure(
+            message="Cover letter analysis failed",
+            details={"reason": str(e)}
+        )
     logger.info("[LLM] Call completed: cover_letter_analysis")
     analysis = response.content
     return {
@@ -573,8 +604,15 @@ def cover_letter_generation_node(state: ResumeOptimizationState) -> ResumeOptimi
     )
     
     logger.info("[LLM] Call started: cover_letter_generation")
-    with Timer("llm_invoke for cover_letter_generation"):
-        response = _safe_invoke(llm, prompt)
+    try:
+        with Timer("llm_invoke for cover_letter_generation"):
+            response = _safe_invoke(llm, prompt)
+    except Exception as e:
+        logger.exception("[LLM] Call failed: cover_letter_generation", extra={"error_type": "system_error"})
+        raise SystemFailure(
+            message="Cover letter generation failed",
+            details={"reason": str(e)}
+        )
     logger.info("[LLM] Call completed: cover_letter_generation")
     cover_letter_md = response.content
     
