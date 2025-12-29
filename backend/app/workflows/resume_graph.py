@@ -20,6 +20,7 @@ from ..utils.text_cleaners import (
 )
 from ..utils.web_scraper import get_url_content_from_tavily
 from ..utils.token_utils import estimate_tokens
+from ..utils.timing import Timer
 
 logger = logging.getLogger(__name__)
 logger.info("Resume Graph initialized.")
@@ -185,7 +186,8 @@ def keyword_extraction_node(state: ResumeOptimizationState) -> ResumeOptimizatio
     )
     messages.append(AIMessage(content=f"Sub-task: Sending prompt to LLM for keyword extraction. Prompt snippet: '{prompt[:100]}...'").model_dump())
     logger.info("[LLM] Call started: keyword_extraction")
-    response = _safe_invoke(llm, prompt)
+    with Timer("llm_invoke for keyword_extraction"):
+        response = _safe_invoke(llm, prompt)
     logger.info("[LLM] Call completed: keyword_extraction")
     keywords = [kw.strip() for kw in response.content.split(',') if kw.strip()]
 
@@ -231,7 +233,8 @@ def resume_analysis_node(state: ResumeOptimizationState) -> ResumeOptimizationSt
     )
     messages.append(AIMessage(content=f"Sub-task: Sending prompt to LLM for initial resume analysis. Prompt snippet: '{prompt[:100]}...'").model_dump())
     logger.info("[LLM] Call started: resume_analysis")
-    response = _safe_invoke(llm, prompt)
+    with Timer("llm_invoke for resume_analysis"):
+        response = _safe_invoke(llm, prompt)
     logger.info("[LLM] Call completed: resume_analysis")
     analysis_report = response.content
 
@@ -328,7 +331,8 @@ Improved Resume:"""
     
     logger.info("[LLM] Call started: resume_editing")
     try:
-        response = _safe_invoke(llm, editing_instructions)
+        with Timer("llm_invoke for resume_editing"):
+            response = _safe_invoke(llm, editing_instructions)
         logger.info("[LLM] Call completed: resume_editing")
         raw_response = response.content.strip()
         
@@ -432,7 +436,8 @@ def final_ats_analysis_node(state: ResumeOptimizationState) -> ResumeOptimizatio
     )
     messages.append(AIMessage(content=f"Sub-task: Sending prompt to LLM for final ATS score. Prompt snippet: '{prompt[:100]}...'").model_dump())
     logger.info("[LLM] Call started: final_ats_analysis")
-    response = _safe_invoke(llm, prompt)
+    with Timer("llm_invoke for final_ats_analysis"):
+        response = _safe_invoke(llm, prompt)
     logger.info("[LLM] Call completed: final_ats_analysis")
     new_analysis_summary = response.content
 
@@ -528,7 +533,8 @@ def cover_letter_analysis_node(state: ResumeOptimizationState) -> ResumeOptimiza
     )
     
     logger.info("[LLM] Call started: cover_letter_analysis")
-    response = _safe_invoke(llm, prompt)
+    with Timer("llm_invoke for cover_letter_analysis"):
+        response = _safe_invoke(llm, prompt)
     logger.info("[LLM] Call completed: cover_letter_analysis")
     analysis = response.content
     return {
@@ -567,7 +573,8 @@ def cover_letter_generation_node(state: ResumeOptimizationState) -> ResumeOptimi
     )
     
     logger.info("[LLM] Call started: cover_letter_generation")
-    response = _safe_invoke(llm, prompt)
+    with Timer("llm_invoke for cover_letter_generation"):
+        response = _safe_invoke(llm, prompt)
     logger.info("[LLM] Call completed: cover_letter_generation")
     cover_letter_md = response.content
     

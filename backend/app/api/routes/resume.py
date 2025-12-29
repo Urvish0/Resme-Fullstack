@@ -20,6 +20,10 @@ from ...utils.cache import (
     get_cached_result,
     set_cached_result,
 )
+from ...utils.timing import Timer 
+
+
+
 
 logger = logging.getLogger(__name__)
 
@@ -29,62 +33,67 @@ MAX_INPUT = LIMITS["max_input_tokens"] - LIMITS["safety_margin"]
 
 router = APIRouter(prefix="/optimize", tags=["Resume"])
 
-@router.post("", response_model=ResumeOptimizeResponse)
-def optimize_resume(payload: ResumeOptimizeRequest, request: Request):
-    
-    logger.info("[API] Optimize resume request started")
-    
-    client_ip = request.client.host
+with Timer("total_request"):
+    @router.post("", response_model=ResumeOptimizeResponse)
+    def optimize_resume(payload: ResumeOptimizeRequest, request: Request):
+        
+        logger.info("[API] Optimize resume request started")
+        
+        client_ip = request.client.host
 
-    if is_rate_limited(client_ip):
-        logger.warning(f"[API] Rate limit exceeded for IP: {client_ip}")
-        raise HTTPException(
-            status_code=429,
-            detail="Too many requests. Please try again later."
+        if is_rate_limited(client_ip):
+            logger.warning(f"[API] Rate limit exceeded for IP: {client_ip}")
+            raise HTTPException(
+                status_code=429,
+                detail="Too many requests. Please try again later."
+            )
+            
+        cache_payload = {
+            "resume": payload.resume_text,
+            "jd": payload.job_description,
+            "format": payload.resume_format,
+        }
+
+        cache_key = make_cache_key(cache_payload)
+        
+        with Timer("cache_lookup"):
+            cached = get_cached_result(cache_key)
+        
+        if cached:
+            logger.info("[API] Returning cached result, cache_hit")
+            return cached
+
+        job_description = enforce_token_limit(
+            payload.job_description,
+            max_tokens=MAX_INPUT // 2
+        )
+
+        resume_text = enforce_token_limit(
+            payload.resume_text,
+            max_tokens=MAX_INPUT // 2
         )
         
-    cache_payload = {
-        "resume": payload.resume_text,
-        "jd": payload.job_description,
-        "format": payload.resume_format,
-    }
+        initial_state = {
+            "job_description_raw": job_description,
+            "resume_raw_content": resume_text,
+            "resume_format": payload.resume_format,
+        }
+        
+        with Timer("workflow_execution"):
+            result = run_resume_workflow(initial_state)
 
-    cache_key = make_cache_key(cache_payload)
-    cached = get_cached_result(cache_key)
-    if cached:
-        logger.info("[API] Returning cached result")
-        return cached
+        response = ResumeOptimizeResponse(
+            optimized_resume=result.get("edited_resume_content", ""),
+            cover_letter=result.get("cover_letter_text"),
+            old_ats_score=result.get("old_ats_score"),
+            new_ats_score=result.get("new_ats_score"),
+            extracted_keywords=result.get("extracted_keywords", [])
+        )
 
-    job_description = enforce_token_limit(
-        payload.job_description,
-        max_tokens=MAX_INPUT // 2
-    )
-
-    resume_text = enforce_token_limit(
-        payload.resume_text,
-        max_tokens=MAX_INPUT // 2
-    )
-    
-    initial_state = {
-        "job_description_raw": job_description,
-        "resume_raw_content": resume_text,
-        "resume_format": payload.resume_format,
-    }
-    
-    result = run_resume_workflow(initial_state)
-
-    response = ResumeOptimizeResponse(
-        optimized_resume=result.get("edited_resume_content", ""),
-        cover_letter=result.get("cover_letter_text"),
-        old_ats_score=result.get("old_ats_score"),
-        new_ats_score=result.get("new_ats_score"),
-        extracted_keywords=result.get("extracted_keywords", [])
-    )
-
-    set_cached_result(cache_key, response.model_dump())
-    
-    logger.info("[API] Optimize resume request completed")
-    return response
+        set_cached_result(cache_key, response.model_dump())
+        
+        logger.info("[API] Optimize resume request completed")
+        return response
 
 @router.post("/stream") #For SSE streaming (server sent event)
 def optimize_resume_stream(payload: ResumeOptimizeRequest, request: Request):
