@@ -13,7 +13,7 @@ from ..core.exceptions import SystemFailure, RetryableFailure
 logger = logging.getLogger(__name__)
 logger.info("Workflow Service initialized.")
 
-CACHE_VERSION = "v2"
+CACHE_VERSION = "v1"
 CACHE_TTL_SECONDS = 60 * 60  # 1 hour
 
 MAX_RESUME_CHARS = 6000 

@@ -1,8 +1,10 @@
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
 import json
 import logging
-
+import uuid
+import threading
 from ...schemas.resume import (
     ResumeOptimizeRequest,
     ResumeOptimizeResponse
@@ -22,8 +24,8 @@ from ...utils.cache import (
 )
 from ...utils.timing import Timer 
 from ...core.exceptions import SystemFailure
-
-
+from ...services.background__tasks import run_resume_job
+from ...services.job_service import JobStatus, set_job_status, get_job_status
 
 
 logger = logging.getLogger(__name__)
@@ -144,3 +146,44 @@ def optimize_resume_stream(payload: ResumeOptimizeRequest, request: Request):
         event_generator(),
         media_type="text/event-stream"
     )
+
+class OptimizeAsyncRequest(BaseModel):
+    job_description: str = Field(min_length=50)
+    resume_text: str = Field(min_length=50)
+    resume_format: str = "markdown"
+
+
+@router.post("/async")
+def optimize_resume_async(payload: OptimizeAsyncRequest):
+    job_id = f"job-{uuid.uuid4().hex}"
+
+    initial_state = {
+        "job_description_raw": payload.job_description,
+        "resume_raw_content": payload.resume_text,
+        "resume_format": payload.resume_format,
+    }
+
+    # Set initial job state
+    set_job_status(job_id, JobStatus.PENDING)
+
+    # Run in background thread
+    thread = threading.Thread(
+        target=run_resume_job,
+        args=(job_id, initial_state),
+        daemon=True,
+    )
+    thread.start()
+
+    return {
+        "job_id": job_id,
+        "status": "accepted",
+    }
+
+@router.get("/status/{job_id}")
+def get_async_status(job_id: str):
+    job = get_job_status(job_id)
+
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    return job
