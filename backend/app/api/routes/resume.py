@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Header
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 import json
@@ -26,7 +26,11 @@ from ...utils.timing import Timer
 from ...core.exceptions import SystemFailure
 from ...services.background__tasks import run_resume_job
 from ...services.job_service import JobStatus, set_job_status, get_job_status
-
+from ...utils.idempotency import (
+    compute_idempotency_key,
+    get_idempotent_result,
+    set_idempotent_result,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -154,7 +158,23 @@ class OptimizeAsyncRequest(BaseModel):
 
 
 @router.post("/async")
-def optimize_resume_async(payload: OptimizeAsyncRequest):
+def optimize_resume_async(
+    payload: OptimizeAsyncRequest,
+    idempotency_key: str = Header(..., alias="Idempotency-Key"),
+    ):
+    
+    request_payload = payload.model_dump()
+    
+    idem_hash = compute_idempotency_key(
+        idempotency_key,
+        request_payload,
+    )
+    
+    cached = get_idempotent_result(idem_hash)
+    if cached:
+        logger.info("[API] Returning idempotent cached result")
+        return json.loads(cached)
+    
     job_id = f"job-{uuid.uuid4().hex}"
 
     initial_state = {
