@@ -1,4 +1,4 @@
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Header
+from fastapi import APIRouter,HTTPException, Request, Header, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 import json
@@ -165,8 +165,9 @@ def optimize_resume_async(
     payload: OptimizeAsyncRequest,
     request: Request,
     idempotency_key: str = Header(..., alias="Idempotency-Key"),
+    retry: bool = Query(False),
 ):
-    request_id = request.state.request_id
+    request_id = getattr(request.state, "request_id", None)
 
     logger.info(
         "[API] Async optimize request received",
@@ -176,16 +177,27 @@ def optimize_resume_async(
     # 1️ IDEMPOTENCY REPLAY CHECK (VERY TOP)
     idem_entry = get_idempotent_job(idempotency_key)
 
+    parent_job_id = None
+
     if idem_entry:
-        logger.info(
-            f"[IDEMPOTENCY] Replay detected for key {idempotency_key}",
-            extra={"request_id": request_id},
-        )
-        return {
-            "job_id": idem_entry["job_id"],
-            "status": idem_entry["status"],
-            "source": "idempotent_replay",
-        }
+        status = idem_entry["status"]
+        parent_job_id = idem_entry["job_id"]
+        
+        if status == JobStatus.FAILED and retry:
+            logger.info(
+                f"[RETRY] Retrying failed job {parent_job_id}",
+                extra={"request_id": request_id},
+            )
+        else:
+            logger.info(
+                f"[IDEMPOTENCY] Replay detected",
+                extra={"request_id": request_id},
+            )
+            return {
+                "job_id": parent_job_id,
+                "status": status,
+                "source": "idempotent_replay",
+            }
 
     # 2️ CREATE NEW JOB
     job_id = f"job-{uuid.uuid4().hex}"
@@ -202,7 +214,11 @@ def optimize_resume_async(
         job_id,
         JobStatus.PENDING,
     )
-    set_job_status(job_id, JobStatus.PENDING)
+    set_job_status(
+        job_id, 
+        JobStatus.PENDING,
+        parent_job_id,
+    )
 
     # 3️ BACKGROUND EXECUTION
     def background_runner():
@@ -255,6 +271,7 @@ def optimize_resume_async(
     return {
         "job_id": job_id,
         "status": JobStatus.PENDING,
+        "retry_of": parent_job_id,
     }
 
 @router.get("/status/{job_id}")
