@@ -1,10 +1,11 @@
-from fastapi import APIRouter, HTTPException, Request, Header
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Header
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 import json
 import logging
 import uuid
 import threading
+
 from ...schemas.resume import (
     ResumeOptimizeRequest,
     ResumeOptimizeResponse
@@ -26,11 +27,13 @@ from ...utils.timing import Timer
 from ...core.exceptions import SystemFailure
 from ...services.background__tasks import run_resume_job
 from ...services.job_service import JobStatus, set_job_status, get_job_status
-from ...utils.idempotency import (
-    compute_idempotency_key,
-    get_idempotent_result,
-    set_idempotent_result,
+from backend.app.core.idempotency import (
+    get_idempotent_job,
+    set_idempotent_job,
 )
+from ...services.job_service import JobStatus 
+
+
 
 logger = logging.getLogger(__name__)
 
@@ -160,21 +163,31 @@ class OptimizeAsyncRequest(BaseModel):
 @router.post("/async")
 def optimize_resume_async(
     payload: OptimizeAsyncRequest,
+    request: Request,
     idempotency_key: str = Header(..., alias="Idempotency-Key"),
-    ):
-    
-    request_payload = payload.model_dump()
-    
-    idem_hash = compute_idempotency_key(
-        idempotency_key,
-        request_payload,
+):
+    request_id = request.state.request_id
+
+    logger.info(
+        "[API] Async optimize request received",
+        extra={"request_id": request_id},
     )
-    
-    cached = get_idempotent_result(idem_hash)
-    if cached:
-        logger.info("[API] Returning idempotent cached result")
-        return json.loads(cached)
-    
+
+    # 1️ IDEMPOTENCY REPLAY CHECK (VERY TOP)
+    idem_entry = get_idempotent_job(idempotency_key)
+
+    if idem_entry:
+        logger.info(
+            f"[IDEMPOTENCY] Replay detected for key {idempotency_key}",
+            extra={"request_id": request_id},
+        )
+        return {
+            "job_id": idem_entry["job_id"],
+            "status": idem_entry["status"],
+            "source": "idempotent_replay",
+        }
+
+    # 2️ CREATE NEW JOB
     job_id = f"job-{uuid.uuid4().hex}"
 
     initial_state = {
@@ -183,20 +196,65 @@ def optimize_resume_async(
         "resume_format": payload.resume_format,
     }
 
-    # Set initial job state
+    # Store initial idempotency state
+    set_idempotent_job(
+        idempotency_key,
+        job_id,
+        JobStatus.PENDING,
+    )
     set_job_status(job_id, JobStatus.PENDING)
 
-    # Run in background thread
-    thread = threading.Thread(
-        target=run_resume_job,
-        args=(job_id, initial_state),
-        daemon=True,
-    )
-    thread.start()
+    # 3️ BACKGROUND EXECUTION
+    def background_runner():
+        try:
+            set_job_status(job_id, JobStatus.RUNNING)
+            set_idempotent_job(
+                idempotency_key,
+                job_id,
+                JobStatus.RUNNING,
+            )
 
+            result = run_resume_workflow(initial_state)
+
+            set_job_status(
+                job_id,
+                JobStatus.SUCCESS,
+                result=result,
+            )
+
+            set_idempotent_job(
+                idempotency_key,
+                job_id,
+                JobStatus.SUCCESS,
+            )
+
+        except Exception as e:
+            logger.exception(
+                "[ASYNC_JOB] Failed",
+                extra={"request_id": request_id},
+            )
+
+            set_job_status(
+                job_id,
+                JobStatus.FAILED,
+                error=str(e),
+            )
+
+            set_idempotent_job(
+                idempotency_key,
+                job_id,
+                JobStatus.FAILED,
+            )
+
+    threading.Thread(
+        target=background_runner,
+        daemon=True,
+    ).start()
+
+    # 4️ RETURN ACCEPTED RESPONSE
     return {
         "job_id": job_id,
-        "status": "accepted",
+        "status": JobStatus.PENDING,
     }
 
 @router.get("/status/{job_id}")
