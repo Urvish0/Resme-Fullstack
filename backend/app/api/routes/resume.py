@@ -31,8 +31,6 @@ from backend.app.core.idempotency import (
     get_idempotent_job,
     set_idempotent_job,
 )
-from ...services.job_service import JobStatus 
-
 
 
 logger = logging.getLogger(__name__)
@@ -217,13 +215,17 @@ def optimize_resume_async(
     set_job_status(
         job_id, 
         JobStatus.PENDING,
-        parent_job_id,
+        parent_job_id=parent_job_id,
     )
 
     # 3️ BACKGROUND EXECUTION
     def background_runner():
         try:
-            set_job_status(job_id, JobStatus.RUNNING)
+            set_job_status(
+                job_id, 
+                JobStatus.RUNNING,
+                idempotency_key=idempotency_key,
+            )
             set_idempotent_job(
                 idempotency_key,
                 job_id,
@@ -236,6 +238,7 @@ def optimize_resume_async(
                 job_id,
                 JobStatus.SUCCESS,
                 result=result,
+                idempotency_key=idempotency_key,
             )
 
             set_idempotent_job(
@@ -254,6 +257,7 @@ def optimize_resume_async(
                 job_id,
                 JobStatus.FAILED,
                 error=str(e),
+                idempotency_key=idempotency_key,
             )
 
             set_idempotent_job(
