@@ -1,4 +1,10 @@
-from fastapi import APIRouter,HTTPException, Request, Header, Query
+from fastapi import (
+    APIRouter, 
+    HTTPException, 
+    Request, 
+    Header, 
+    Query
+)
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 import json
@@ -26,11 +32,20 @@ from ...utils.cache import (
 from ...utils.timing import Timer 
 from ...core.exceptions import SystemFailure
 from ...services.background__tasks import run_resume_job
-from ...services.job_service import JobStatus, set_job_status, get_job_status
+from ...services.job_service import (
+    JobStatus, 
+    set_job_status, 
+    get_job_status
+)
 from backend.app.core.idempotency import (
     get_idempotent_job,
     set_idempotent_job,
 )
+from ...services.load_control import (
+    can_accept_job, 
+    increment_active_jobs, 
+    decrement_active_jobs)
+
 
 
 logger = logging.getLogger(__name__)
@@ -196,6 +211,16 @@ def optimize_resume_async(
                 "status": status,
                 "source": "idempotent_replay",
             }
+    
+    if not can_accept_job():
+        logger.warning(
+            "[LOAD CONTROL] System overloaded - rejecting async job",
+            extra={"request_id": request_id},
+        )
+        raise HTTPException(
+            status_code=429,
+            detail="System is currently overloaded. Please try again later."
+        )
 
     # 2️ CREATE NEW JOB
     job_id = f"job-{uuid.uuid4().hex}"
@@ -212,6 +237,7 @@ def optimize_resume_async(
         job_id,
         JobStatus.PENDING,
     )
+    
     set_job_status(
         job_id, 
         JobStatus.PENDING,
@@ -221,6 +247,8 @@ def optimize_resume_async(
     # 3️ BACKGROUND EXECUTION
     def background_runner():
         try:
+            increment_active_jobs()
+            
             set_job_status(
                 job_id, 
                 JobStatus.RUNNING,
@@ -240,6 +268,8 @@ def optimize_resume_async(
                 result=result,
                 idempotency_key=idempotency_key,
             )
+            
+            decrement_active_jobs()
 
             set_idempotent_job(
                 idempotency_key,
@@ -260,6 +290,8 @@ def optimize_resume_async(
                 idempotency_key=idempotency_key,
             )
 
+            decrement_active_jobs()
+            
             set_idempotent_job(
                 idempotency_key,
                 job_id,
