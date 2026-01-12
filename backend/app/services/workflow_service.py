@@ -9,7 +9,6 @@ from ..utils.fingerprint import make_request_fingerprint
 from ..core.redis import redis_client
 from ..core.exceptions import SystemFailure, RetryableFailure
 
-
 logger = logging.getLogger(__name__)
 logger.info("Workflow Service initialized.")
 

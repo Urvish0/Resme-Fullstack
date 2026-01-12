@@ -45,8 +45,19 @@ from ...services.load_control import (
     can_accept_job, 
     increment_active_jobs, 
     decrement_active_jobs)
-
-
+from ...observability.metrics import (
+    API_REQUESTS_TOTAL,
+    API_ERRORS_TOTAL,
+    API_REQUEST_DURATION,
+)
+from ...observability.metrics import (
+    JOBS_ACTIVE,
+    JOBS_STARTED_TOTAL,
+    JOBS_COMPLETED_TOTAL,
+    JOBS_FAILED_TOTAL,
+    JOB_DURATION_SECONDS
+)
+from time import perf_counter
 
 logger = logging.getLogger(__name__)
 
@@ -56,9 +67,8 @@ MAX_INPUT = LIMITS["max_input_tokens"] - LIMITS["safety_margin"]
 
 router = APIRouter(prefix="/optimize", tags=["Resume"])
 
-with Timer("total_request"):
-    @router.post("", response_model=ResumeOptimizeResponse)
-    def optimize_resume(payload: ResumeOptimizeRequest, request: Request):
+@router.post("", response_model=ResumeOptimizeResponse)
+def optimize_resume(payload: ResumeOptimizeRequest, request: Request):
         
         logger.info("[API] Optimize resume request started")
         
@@ -246,21 +256,34 @@ def optimize_resume_async(
 
     # 3️ BACKGROUND EXECUTION
     def background_runner():
+        job_start = perf_counter()
         try:
+            ### JOB STARTED ###
             increment_active_jobs()
+            JOBS_STARTED_TOTAL.inc()
+            JOBS_ACTIVE.inc()
             
-            set_job_status(
-                job_id, 
-                JobStatus.RUNNING,
-                idempotency_key=idempotency_key,
-            )
-            set_idempotent_job(
-                idempotency_key,
-                job_id,
-                JobStatus.RUNNING,
-            )
+            API_REQUESTS_TOTAL.labels(
+                    "/optimize/async",
+                    "POST",
+                    "started",
+                ).inc()
 
-            result = run_resume_workflow(initial_state)
+            set_job_status(job_id, JobStatus.RUNNING, idempotency_key=idempotency_key)
+            set_idempotent_job(idempotency_key, job_id, JobStatus.RUNNING)
+
+            with API_REQUEST_DURATION.labels(
+                    "/optimize/async",
+                    "POST",
+                ).time():
+                result = run_resume_workflow(initial_state)
+
+            ### JOB COMPLETED ###
+            API_REQUESTS_TOTAL.labels(
+                    "/optimize/async",
+                    "POST",
+                    "success",
+                ).inc()
 
             set_job_status(
                 job_id,
@@ -269,7 +292,7 @@ def optimize_resume_async(
                 idempotency_key=idempotency_key,
             )
             
-            decrement_active_jobs()
+            JOBS_COMPLETED_TOTAL.inc()
 
             set_idempotent_job(
                 idempotency_key,
@@ -278,10 +301,24 @@ def optimize_resume_async(
             )
 
         except Exception as e:
+            ### JOB FAILED ###
             logger.exception(
                 "[ASYNC_JOB] Failed",
                 extra={"request_id": request_id},
             )
+            
+            API_ERRORS_TOTAL.labels(
+                    "/optimize/async",
+                    "POST",
+                ).inc()
+            
+            API_REQUESTS_TOTAL.labels(
+                    "/optimize/async",
+                    "POST",
+                    "failed",
+                ).inc()
+
+            JOBS_FAILED_TOTAL.inc()
 
             set_job_status(
                 job_id,
@@ -289,14 +326,17 @@ def optimize_resume_async(
                 error=str(e),
                 idempotency_key=idempotency_key,
             )
-
-            decrement_active_jobs()
             
             set_idempotent_job(
                 idempotency_key,
                 job_id,
                 JobStatus.FAILED,
             )
+        finally:
+            duration = perf_counter() - job_start
+            JOB_DURATION_SECONDS.observe(duration)
+            JOBS_ACTIVE.dec()
+            decrement_active_jobs()
 
     threading.Thread(
         target=background_runner,
