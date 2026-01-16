@@ -1,4 +1,4 @@
-from backend.app.core.redis import redis_client
+from app.core.redis import redis_client
 
 ACTIVE_JOBS_KEY = "system:active_jobs"
 MAX_ACTIVE_JOBS = 10

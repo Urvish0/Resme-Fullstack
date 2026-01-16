@@ -1,5 +1,5 @@
 import json
-from backend.app.core.redis import redis_client
+from app.core.redis import redis_client
 
 IDEMPOTENCY_TTL = 60 * 60  # 1 hour
 

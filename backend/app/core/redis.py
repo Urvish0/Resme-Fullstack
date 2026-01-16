@@ -1,12 +1,17 @@
 import os
-import redis 
+import redis
 
-REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
-REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
+REDIS_URL = os.getenv("REDIS_URL")
 
-redis_client = redis.Redis(
-    host=REDIS_HOST, 
-    port=REDIS_PORT, 
-    db=0,
-    decode_responses=True,
-)
+if REDIS_URL:
+    redis_client = redis.from_url(
+        REDIS_URL,
+        decode_responses=True
+    )
+else:
+    redis_client = redis.Redis(
+        host=os.getenv("REDIS_HOST", "localhost"),
+        port=int(os.getenv("REDIS_PORT", 6379)),
+        db=0,
+        decode_responses=True,
+    )

@@ -37,7 +37,7 @@ from ...services.job_service import (
     set_job_status, 
     get_job_status
 )
-from backend.app.core.idempotency import (
+from app.core.idempotency import (
     get_idempotent_job,
     set_idempotent_job,
 )

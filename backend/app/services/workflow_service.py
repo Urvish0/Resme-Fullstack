@@ -75,10 +75,60 @@ def collect_final_result(graph, initial_state: dict) -> dict:
 
     return final_result
 
+# def run_resume_workflow(initial_state: dict) -> dict:
+    
+#     logger.info("[WORKFLOW] Started")
+    
+#     initial_state["resume_raw_content"] = trim_text(
+#         initial_state["resume_raw_content"],
+#         MAX_RESUME_CHARS
+#     )
+
+#     initial_state["job_description_raw"] = trim_text(
+#         initial_state["job_description_raw"],
+#         MAX_JD_CHARS
+#     )
+
+#     cache_key = make_cache_key(initial_state)
+
+#     # 1️⃣ Try cache
+#     try: 
+#         cached = redis_client.get(cache_key)
+#         if cached:
+#             logger.info("[CACHE] Hit — returning cached result")
+#             return json.loads(cached)
+#     except RedisError as e:
+#         logger.warning(f"Redis GET failed, bypassing cache: {str(e)}")
+
+#     logger.info("[CACHE] Miss — running workflow")
+#     # 2️⃣ Run workflow
+#     try:
+#         graph = build_resume_graph()
+#     except Exception as e:
+#         logger.error("[WORKFLOW] Graph execution failed", extra={"error_type": "system_error"})
+#         raise SystemFailure(
+#             message="Workflow execution failed",
+#             details={"reason": str(e)}
+#         )
+
+#     # 3️⃣ Store in cache
+#     try: 
+#         redis_client.setex(
+#             cache_key,
+#             CACHE_TTL_SECONDS,
+#             json.dumps(result)
+#         )
+#         logger.info("[CACHE] Stored result")
+#     except RedisError as e:
+#         logger.warning("[CACHE] Redis SET failed, bypassing cache", extra={"error_type": "retryable_error"})
+#         # Don't raise, just log
+
+#     logger.info("[WORKFLOW] Completed")
+#     return result
+
 def run_resume_workflow(initial_state: dict) -> dict:
-    
     logger.info("[WORKFLOW] Started")
-    
+
     initial_state["resume_raw_content"] = trim_text(
         initial_state["resume_raw_content"],
         MAX_RESUME_CHARS
@@ -91,41 +141,59 @@ def run_resume_workflow(initial_state: dict) -> dict:
 
     cache_key = make_cache_key(initial_state)
 
-    # 1️⃣ Try cache
-    try: 
+    # 1️⃣ Cache check
+    try:
         cached = redis_client.get(cache_key)
         if cached:
             logger.info("[CACHE] Hit — returning cached result")
             return json.loads(cached)
-    except RedisError as e:
-        logger.warning(f"Redis GET failed, bypassing cache: {str(e)}")
+    except RedisError:
+        logger.warning("[CACHE] Redis GET failed, bypassing cache")
 
-    logger.info("[CACHE] Miss — running workflow")
-    # 2️⃣ Run workflow
+    # 2️⃣ Run graph fully
     try:
         graph = build_resume_graph()
-        result = collect_final_result(graph, initial_state)
+        final_state = graph.invoke(
+            {
+                **initial_state,
+                "messages": [],
+                "extracted_keywords": [],
+                "human_feedback": "proceed",
+                "task_complete": False,
+            },
+            {"configurable": {"thread_id": "blocking"}}
+        )
     except Exception as e:
-        logger.error("[WORKFLOW] Graph execution failed", extra={"error_type": "system_error"})
+        logger.exception("[WORKFLOW] Graph execution failed")
         raise SystemFailure(
             message="Workflow execution failed",
             details={"reason": str(e)}
         )
 
-    # 3️⃣ Store in cache
-    try: 
+    # 3️⃣ Extract REAL outputs (this is the key fix)
+    result = {
+        "optimized_resume": final_state.get("edited_resume_content", ""),
+        "cover_letter": final_state.get("cover_letter_text", ""),
+        "old_ats_score": final_state.get("old_ats_score"),
+        "new_ats_score": final_state.get("new_ats_score"),
+        "extracted_keywords": final_state.get("extracted_keywords", []),
+    }
+
+    # 4️⃣ Cache
+    try:
         redis_client.setex(
             cache_key,
             CACHE_TTL_SECONDS,
-            json.dumps(result)
+            json.dumps(result),
         )
         logger.info("[CACHE] Stored result")
-    except RedisError as e:
-        logger.warning("[CACHE] Redis SET failed, bypassing cache", extra={"error_type": "retryable_error"})
-        # Don't raise, just log
+    except RedisError:
+        logger.warning("[CACHE] Redis SET failed")
 
     logger.info("[WORKFLOW] Completed")
     return result
+
+
 
 def stream_resume_workflow(
     initial_state: Dict[str, Any],
