@@ -2,11 +2,14 @@
 
 import { useState, useEffect } from "react";
 import ReactMarkdown from "react-markdown"
-import {
-  optimizeResumeAsync,
-  getJobStatus,
-} from "@/lib/api";
+import { optimizeResumeAsync, getJobStatus} from "@/lib/api";
 import type { JobStatusResponse } from "@/lib/api";
+import toast from "react-hot-toast";
+import mammoth from "mammoth";
+import dynamic from "next/dynamic"
+import { uploadResumeFile, fetchJDFromUrl } from "./lib/api";
+
+
 export default function Home() {
   const [jobId, setJobId] = useState<string | null>(null);
   const [jobStatus, setJobStatus] = useState<JobStatusResponse | null>(null);
@@ -14,6 +17,12 @@ export default function Home() {
   const [error, setError] = useState<string | null>(null)
   const [activeTab, setActiveTab] = useState<"resume" | "cover">("resume")
   const [progress, setProgress] = useState(0)
+  const [jobDescription, setJobDescription] = useState("")
+  const [resumeText, setResumeText] = useState("")
+  const [resumeMode, setResumeMode] = useState<"paste" | "upload">("paste")
+  const [jdMode, setJdMode] = useState<"paste" | "url">("paste")
+  const [jdUrl, setJdUrl] = useState("")
+  const [uploading, setUploading] = useState(false);
 
   // job status progress
   useEffect(() => {
@@ -37,21 +46,24 @@ export default function Home() {
         break
     }
   }, [jobStatus])
-  
 
   // Restore page on load
   useEffect(() => {
     const savedJobId = localStorage.getItem("jobId")
     if (savedJobId) {
-      setJobId(savedJobId)
+      toast("Previous job expired. Please start a new one.", { icon: "ℹ️" });
+      localStorage.removeItem("jobId");
     }
+    
   }, [])
   
+  // Copy to clipboard
   const copyToClipboard = async (text: string) => {
     await navigator.clipboard.writeText(text)
-    alert("Copied to clipboard")
+    toast.success("Copied to clipboard")
   }
 
+  // Download
   const download = (content: string, filename: string) => {
     const blob = new Blob([content], { type: "text/markdown" })
     const url = URL.createObjectURL(blob)
@@ -62,40 +74,47 @@ export default function Home() {
     URL.revokeObjectURL(url)
   }
   
-  
   const startJob = async () => { 
     setLoading(true)
     setError(null)
     setJobStatus(null)
-    //setResult(null)
     setProgress(0)
     setJobId(null)
     setActiveTab("resume")
 
-
     try {
+
+      // const res = await optimizeResumeAsync(
+      //   {
+      //     job_description: "Seeking a data scientist with strong Python, SQL, and machine learning skills. Must have experience with pandas, scikit-learn, and data visualization libraries. Knowledge of statistical analysis and A/B testing required.",
+        
+      //     resume_text: "Data scientist skilled in Python, SQL, and machine learning using pandas and scikit-learn. Experienced in statistical analysis, data visualization, and designing A/B testing frameworks.",
+        
+      //     resume_format: "markdown"
+      //   },
+      //   crypto.randomUUID()
+      // )
+
       const res = await optimizeResumeAsync(
         {
-          job_description: "We are looking for a backend engineer with strong experience in Python, FastAPI, Redis, AI systems, async programming, and production-grade APIs. The candidate should understand scalability, caching, and system design.",
-
-          resume_text: "I am a backend-focused software engineer with experience in Python, FastAPI, Redis, async APIs, and AI-powered systems. I have built production services with caching and streaming.",
-
+          job_description: jobDescription,
+          resume_text: resumeText,
           resume_format: "markdown"
         },
         crypto.randomUUID()
       )
 
       setJobId(res.job_id)
+      toast.success("Optimization started")
       localStorage.setItem("jobId", res.job_id)
     } catch (e) {
-      setError("Failed to start job")
+      toast.error("Failed to start optimization")      
       setLoading(false)
     }
   }
-
+  
   useEffect(() => {
     if (!jobId) return
-
     const interval = setInterval(async () => {
       try {
         const status = await getJobStatus(jobId)
@@ -113,7 +132,8 @@ export default function Home() {
           setJobId(null)
           localStorage.removeItem("jobId")
         } else {
-          setError("Failed to fetch job status")
+          toast.error("Failed to fetch job status")
+
         }
         setLoading(false)
       }
@@ -124,93 +144,272 @@ export default function Home() {
 
   useEffect(() => {
     if (jobStatus?.status === "success") {
+      toast.success("Optimization completed")
       window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" })
     }
   }, [jobStatus?.status])
   
-
   return (
-    <main className="p-6 space-y-4">
-      {!jobId && !loading && (
-        <div className="rounded border border-dashed p-6 text-center text-gray-500">
-          <p className="mb-2">No optimization running</p>
-          <p className="text-sm">
-            Click <strong>Start Optimization</strong> to generate your resume and cover letter.
+    <main className="min-h-screen bg-neutral-950 text-neutral-100">
+      <div className="mx-auto max-w-7xl px-6 py-10">
+
+        {/* Header */}
+        <div className="mb-8">
+          <h1 className="text-4xl font-semibold tracking-tight">
+            Resume Optimizer
+          </h1>
+          <p className="mt-2 text-neutral-400 max-w-xl">
+            ATS-optimized resumes and cover letters generated with AI.
           </p>
         </div>
-      )}
 
-      <button 
-      onClick={startJob} 
-      disabled={loading || ["pending", "running"].includes(jobStatus?.status ?? "")}>
-        {loading ? "Processing..." : "Start Optimization"}
-      </button>
+        {/* Bento Grid */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
 
-      
-      {jobStatus && (
-        <div className="w-full max-w-md">
-          <div className="h-2 w-full bg-neutral-700 rounded overflow-hidden">
-            <div
-              className={`h-full transition-all duration-500 ${
-                jobStatus.status === "failed"
-                  ? "bg-red-500"
-                  : jobStatus.status === "success"
-                  ? "bg-green-500"
-                  : "bg-blue-500 animate-pulse"
-              }`}
-              style={{ width: `${progress}%` }}
-            />
+        {/* Job Description */}
+        <div className="rounded-xl border border-neutral-800 bg-neutral-950 p-4">
+          <div className="flex items-center justify-between mb-2">
+            <label className="text-sm font-medium text-neutral-300">
+              Job Description
+            </label>
+
+            <div className="flex gap-2 text-xs">
+              <button
+                onClick={() => setJdMode("paste")}
+                className={`px-2 py-1 rounded ${
+                  jdMode === "paste"
+                    ? "bg-blue-600 text-white"
+                    : "text-neutral-400 hover:text-neutral-200"
+                }`}
+              >
+                Paste
+              </button>
+              <button
+                onClick={() => setJdMode("url")}
+                className={`px-2 py-1 rounded ${
+                  jdMode === "url"
+                    ? "bg-blue-600 text-white"
+                    : "text-neutral-400 hover:text-neutral-200"
+                }`}
+              >
+                URL
+              </button>
+            </div>
           </div>
 
-          <p className="mt-1 text-xs text-gray-400">
-            {jobStatus.status === "pending" && "Queued…"}
-            {jobStatus.status === "running" && "Optimizing resume…"}
-            {jobStatus.status === "success" && "Completed"}
-            {jobStatus.status === "failed" && "Failed"}
-          </p>
+          {jdMode === "paste" ? (
+            <>
+              <textarea
+                value={jobDescription}
+                onChange={(e) => setJobDescription(e.target.value)}
+                rows={6}
+                placeholder="Paste the job description here…"
+                className="w-full resize-none rounded-lg bg-neutral-900 border border-neutral-800 p-3 text-sm text-neutral-100 placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              <div className="mt-1 text-xs text-neutral-500 text-right">
+                {jobDescription.length} characters
+              </div>
+            </>
+          ) : (
+            <>
+              <input
+                type="url"
+                value={jdUrl}
+                onChange={(e) => setJdUrl(e.target.value)}
+                placeholder="https://jobs.company.com/role"
+                className="w-full rounded-lg bg-neutral-900 border border-neutral-800 p-3 text-sm text-neutral-100 placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              <button
+                onClick={async () => {
+                  if (!jdUrl.trim()) return;
+
+                  try {
+                    toast.loading("Fetching job description...");
+                    const data = await fetchJDFromUrl(jdUrl);
+                    setJobDescription(data.job_description);
+                    setJdMode("paste");
+                    toast.dismiss();
+                    toast.success("Job description extracted");
+                  } catch (err: any) {
+                    toast.dismiss();
+                    toast.error(err.message);
+                  }
+                }}
+                className="mt-2 text-xs text-blue-400 hover:underline"
+              >
+                Extract Job Description
+              </button>
+
+            </>
+          )}
         </div>
-      )}
-      {jobStatus?.status === "pending" && (
-        <p className="text-sm text-yellow-500">
-          Job queued… starting shortly.
-        </p>
-      )}
 
-      
-      {jobId && <p>Job ID: {jobId}</p>}
+        {/* Resume */}
+        <div className="rounded-xl border border-neutral-800 bg-neutral-950 p-4">
+          <div className="flex items-center justify-between mb-2">
+            <label className="text-sm font-medium text-neutral-300">
+              Resume
+            </label>
 
-      {jobStatus && (
-        <>
-          <p className="font-medium">
-            Status:{" "}
-            <span className={
-              jobStatus.status === "success"
-                ? "text-green-600"
-                : jobStatus.status === "failed"
-                ? "text-red-600"
-                : "text-yellow-600"
-            }>
-              {jobStatus.status}
-            </span>
-          </p>
+            <div className="flex gap-2 mb-3">
+              <button
+                onClick={() => setResumeMode("paste")}
+                className={`px-3 py-1.5 rounded-md text-sm ${
+                  resumeMode === "paste"
+                    ? "bg-blue-600 text-white"
+                    : "bg-neutral-800 text-neutral-400"
+                }`}
+              >
+                Paste Resume
+              </button>
 
-          {jobStatus?.status === "success" && !jobStatus.result && (
-            <p className="text-yellow-500">
-              Job completed, but no result returned.
-            </p>
+              <button
+                onClick={() => setResumeMode("upload")}
+                className={`px-3 py-1.5 rounded-md text-sm ${
+                  resumeMode === "upload"
+                    ? "bg-blue-600 text-white"
+                    : "bg-neutral-800 text-neutral-400"
+                }`}
+              >
+                Upload File
+              </button>
+            </div>
+
+          </div>
+
+          {resumeMode === "paste" && (
+            <textarea
+              value={resumeText}
+              onChange={(e) => setResumeText(e.target.value)}
+              rows={8}
+              placeholder="Paste your resume content here…"
+              className="w-full resize-none rounded-lg bg-neutral-900 border border-neutral-800 p-3 text-sm text-neutral-100 placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
           )}
 
-          {jobStatus.status === "success" && jobStatus.result && (
-            <section className="space-y-4 border-t pt-4">
-              <div className="flex gap-4 border-b">
+          {resumeMode === "upload" && (
+            <input
+              type="file"
+              accept=".pdf,.doc,.docx,.txt,.md"
+              disabled={uploading}
+              onChange={async (e) => {
+                const file = e.target.files?.[0];
+                if (!file) return;
+
+                try {
+                  setUploading(true);
+                  toast.loading("Extracting resume…");
+
+                  const data = await uploadResumeFile(file);
+                  setResumeText(data.text);
+                  setResumeMode("paste");
+
+                  toast.dismiss();
+                  toast.success("Resume extracted successfully");
+                } catch (err: any) {
+                  toast.dismiss();
+                  toast.error(err.message || "Failed to upload resume");
+                } finally {
+                  setUploading(false);
+                }
+              }}
+            />
+          )}
+
+
+
+        </div>
+
+
+          {/* Left – Action */}
+          <div className="lg:col-span-1 rounded-2xl border border-neutral-800 bg-neutral-900 p-6 space-y-4">
+            <h2 className="text-lg font-medium">Start Optimization</h2>
+            <p className="text-sm text-neutral-400">
+              Uses your resume + job description to generate optimized output.
+            </p>
+
+            <button
+              onClick={startJob}
+              disabled={
+                loading ||
+                uploading ||
+                !resumeText.trim() ||
+                (jdMode === "paste" && !jobDescription.trim()) ||
+                (jdMode === "url" && !jdUrl.trim())
+              }
+              
+              className="w-full rounded-lg bg-blue-600 px-6 py-3 text-sm font-medium hover:bg-blue-500 disabled:opacity-50"
+            >
+              {loading ? "Processing…" : "Start Optimization"}
+            </button>
+          </div>
+
+          {/* Right Top – Status */}
+          {jobStatus && (
+            <div className="lg:col-span-2 rounded-2xl border border-neutral-800 bg-neutral-900 p-6 space-y-4">
+              <div className="flex items-center justify-between">
+                <h2 className="text-lg font-medium">Job Status</h2>
+                <span
+                  className={`rounded-full px-3 py-1 text-xs font-medium ${
+                    jobStatus.status === "success"
+                      ? "bg-green-500/10 text-green-400"
+                      : jobStatus.status === "failed"
+                      ? "bg-red-500/10 text-red-400"
+                      : "bg-blue-500/10 text-blue-400"
+                  }`}
+                >
+                  {jobStatus.status}
+                </span>
+              </div>
+
+              <div className="h-2 w-full overflow-hidden rounded bg-neutral-800">
+                <div
+                  className={`h-full transition-all duration-500 ${
+                    jobStatus.status === "failed"
+                      ? "bg-red-500"
+                      : jobStatus.status === "success"
+                      ? "bg-green-500"
+                      : "bg-blue-500 animate-pulse"
+                  }`}
+                  style={{ width: `${progress}%` }}
+                />
+              </div>
+
+              <p className="text-xs text-neutral-400">
+                {jobStatus.status === "pending" && "Queued…"}
+                {jobStatus.status === "running" && "Optimizing resume…"}
+                {jobStatus.status === "success" && "Completed successfully"}
+                {jobStatus.status === "failed" && "Job failed"}
+              </p>
+            </div>
+          )}
+
+          {/* Results */}
+          {jobStatus?.status === "success" && jobStatus.result && (
+            <div className="lg:col-span-3 rounded-2xl border border-neutral-800 bg-neutral-900 p-6 space-y-6">
+              <div className="flex items-center justify-between">
+                <h2 className="text-xl font-semibold">Results</h2>
+                <button
+                  onClick={() => {
+                    setJobId(null);
+                    setJobStatus(null);
+                    setActiveTab("resume");
+                  }}
+                  className="text-sm text-blue-400 hover:underline"
+                >
+                  Start new
+                </button>
+              </div>
+
+              {/* Tabs */}
+              <div className="flex gap-6 border-b border-neutral-800">
                 <button
                   onClick={() => setActiveTab("resume")}
-                  disabled={jobStatus?.status !== "success"}
-                  className={`pb-2 ${
+                  className={`pb-2 text-sm ${
                     activeTab === "resume"
-                      ? "border-b-2 border-blue-500 font-semibold"
-                      : "text-gray-500"
-                  } disabled:opacity-50`}
+                      ? "border-b-2 border-blue-500 font-medium"
+                      : "text-neutral-500"
+                  }`}
                 >
                   Resume
                 </button>
@@ -218,131 +417,101 @@ export default function Home() {
                 {jobStatus.result.cover_letter && (
                   <button
                     onClick={() => setActiveTab("cover")}
-                    disabled={jobStatus?.status !== "success"}
-                    className={`pb-2 ${
+                    className={`pb-2 text-sm ${
                       activeTab === "cover"
-                        ? "border-b-2 border-blue-500 font-semibold"
-                        : "text-gray-500"
-                    } disabled:opacity-50`}
+                        ? "border-b-2 border-blue-500 font-medium"
+                        : "text-neutral-500"
+                    }`}
                   >
                     Cover Letter
                   </button>
                 )}
               </div>
 
-
-              <h2 className="text-lg font-semibold">
-                {activeTab === "resume" ? "Optimized Resume" : "Cover Letter"}
-              </h2>
-
-              {jobStatus.result?.old_ats_score !== undefined &&
-                jobStatus.result?.new_ats_score !== undefined && (
-                  <p className="text-sm">
-                    ATS Score:{" "}
-                    <span className="line-through mr-2 text-gray-500">
+              {/* ATS Score */}
+              {activeTab === "resume" &&
+                jobStatus.result.old_ats_score !== undefined &&
+                jobStatus.result.new_ats_score !== undefined && (
+                  <p className="text-sm text-neutral-400">
+                    ATS Score{" "}
+                    <span className="line-through mx-2">
                       {jobStatus.result.old_ats_score}%
                     </span>
-                    <span className="text-green-500 font-semibold">
+                    <span className="font-semibold text-green-400">
                       {jobStatus.result.new_ats_score}%
                     </span>
                   </p>
                 )}
 
-                {activeTab === "resume" && (
-                  <>
-                    {jobStatus.result.optimized_resume ? (
-                      <div className="relative prose prose-invert max-w-none rounded bg-neutral-900 p-4 border border-neutral-700">
-                        <ReactMarkdown>
-                          {jobStatus.result.optimized_resume}
-                        </ReactMarkdown>
-
-                        {jobStatus.result.optimized_resume && (
-                          <div className="mt-3 flex gap-4 text-sm">
-                            <button
-                            onClick={() =>
-                              copyToClipboard(jobStatus.result!.optimized_resume!)
-                            }
-                            className="mt-2 text-sm text-blue-400 hover:underline"
-                          >
-                            Copy Resume
-                          </button>
-                          <button
-                            onClick={() =>
-                              download(jobStatus.result!.optimized_resume!, "optimized_resume.md")
-                            }
-                            className="mt-2 text-sm text-blue-400 hover:underline"
-                          >
-                            Download Resume
-                          </button>
-                          </div>
-                        )}
-                      </div>
-                    ) : (
-                      <p className="text-gray-500">No optimized resume returned.</p>
-                    )}
-                  </>
-                )}
-
-                {activeTab === "cover" && jobStatus.result.cover_letter && (
-                  <div className="relative prose prose-invert max-w-none rounded bg-neutral-900 p-4 border border-neutral-700">
-                    <ReactMarkdown>
-                      {jobStatus.result.cover_letter}
-                    </ReactMarkdown>
-                    {jobStatus.result.cover_letter && (
-                      <div className="mt-3 flex gap-4 text-sm">
-                        <button
-                          onClick={() =>
-                            copyToClipboard(jobStatus.result!.cover_letter!)
-                          }
-                          className="mt-2 text-sm text-blue-400 hover:underline"
-                        >
-                          Copy Cover Letter
-                        </button>
-                        <button
-                          onClick={() =>
-                            download(jobStatus.result!.cover_letter!, "cover_letter.md")
-                          }
-                          className="mt-2 text-sm text-blue-400 hover:underline"
-                        >
-                          Download Cover Letter
-                        </button>
-
-                      </div>
-
-                      )}
+              {/* Content */}
+              {activeTab === "resume" && jobStatus.result.optimized_resume && (
+                <div className="rounded-xl border border-neutral-800 bg-neutral-950 p-5 space-y-4 prose prose-invert max-w-none">
+                  <ReactMarkdown>
+                    {jobStatus.result.optimized_resume}
+                  </ReactMarkdown>
+                  <div className="flex gap-4 text-sm">
+                    <button
+                      onClick={() =>
+                        copyToClipboard(jobStatus.result!.optimized_resume!)
+                      }
+                      className="text-blue-400 hover:underline"
+                    >
+                      Copy
+                    </button>
+                    <button
+                      onClick={() =>
+                        download(
+                          jobStatus.result!.optimized_resume!,
+                          "optimized_resume.md"
+                        )
+                      }
+                      className="text-blue-400 hover:underline"
+                    >
+                      Download
+                    </button>
                   </div>
-                )}
+                </div>
+              )}
 
-
-            </section>
+              {activeTab === "cover" && jobStatus.result.cover_letter && (
+                <div className="rounded-xl border border-neutral-800 bg-neutral-950 p-5 space-y-4 prose prose-invert max-w-none">
+                  <ReactMarkdown>
+                    {jobStatus.result.cover_letter}
+                  </ReactMarkdown>
+                  <div className="flex gap-4 text-sm">
+                    <button
+                      onClick={() =>
+                        copyToClipboard(jobStatus.result!.cover_letter!)
+                      }
+                      className="text-blue-400 hover:underline"
+                    >
+                      Copy
+                    </button>
+                    <button
+                      onClick={() =>
+                        download(
+                          jobStatus.result!.cover_letter!,
+                          "cover_letter.md"
+                        )
+                      }
+                      className="text-blue-400 hover:underline"
+                    >
+                      Download
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
           )}
-
-          {jobStatus?.status === "success" && (
-            <button
-              onClick={() => {
-                setJobId(null)
-                setJobStatus(null)
-                setActiveTab("resume")
-                setError(null)
-              }}
-              className="mt-4 text-sm text-blue-400 hover:underline"
-            >
-              Start new optimization
-            </button>
-          )}
-
-
-
-          {jobStatus.error && <p className="text-red-500">{jobStatus.error}</p>}
-        </>
-      )}
-
-      {error && (
-        <div className="rounded border border-red-400 bg-red-50 p-3 text-sm text-red-700">
-          {error}
         </div>
-      )}
 
+        {error && (
+          <div className="mt-6 rounded-lg border border-red-500/40 bg-red-500/10 p-4 text-sm text-red-400">
+            {error}
+          </div>
+        )}
+      </div>
     </main>
-  )
+  );
+
 }

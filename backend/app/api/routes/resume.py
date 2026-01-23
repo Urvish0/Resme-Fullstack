@@ -3,7 +3,10 @@ from fastapi import (
     HTTPException, 
     Request, 
     Header, 
-    Query
+    Query,
+    UploadFile,
+    File,
+    Body
 )
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -11,6 +14,11 @@ import json
 import logging
 import uuid
 import threading
+import tempfile
+import os
+import re
+import requests
+from bs4 import BeautifulSoup
 
 from ...schemas.resume import (
     ResumeOptimizeRequest,
@@ -58,6 +66,16 @@ from ...observability.metrics import (
     JOB_DURATION_SECONDS
 )
 from time import perf_counter
+from ...utils.file_parsers import (
+    extract_text_from_pdf,
+    extract_text_from_docx,
+    extract_text_from_doc
+)
+from ...utils.web_scraper import get_url_content_from_tavily
+from ...utils.text_cleaners import parse_markdown_to_plain_text
+from ...services.universal_scraper import get_job_description_from_url  
+from ...utils.text_cleaners import clean_resume_response
+
 
 logger = logging.getLogger(__name__)
 
@@ -121,9 +139,14 @@ def optimize_resume(payload: ResumeOptimizeRequest, request: Request):
                     message="Resume optimization workflow failed",
                     details={"***REASON***": str(e)}
                 )
+                
+        optimized_resume = clean_resume_response(
+        result.get("optimized_resume", "")
+)
 
         response = ResumeOptimizeResponse(
-            optimized_resume=result.get("edited_resume_content", ""),
+            # optimized_resume=result.get("edited_resume_content", ""),
+            optimized_resume=optimized_resume,
             cover_letter=result.get("cover_letter_text"),
             old_ats_score=result.get("old_ats_score"),
             new_ats_score=result.get("new_ats_score"),
@@ -181,7 +204,6 @@ class OptimizeAsyncRequest(BaseModel):
     job_description: str = Field(min_length=50)
     resume_text: str = Field(min_length=50)
     resume_format: str = "markdown"
-
 
 @router.post("/async")
 def optimize_resume_async(
@@ -358,3 +380,208 @@ def get_async_status(job_id: str):
         raise HTTPException(status_code=404, detail="Job not found")
 
     return job
+
+@router.post("/upload")
+async def upload_resume(file: UploadFile = File(...)):
+    filename = file.filename.lower()
+
+    if not filename.endswith((".pdf", ".docx", ".doc")):
+        raise HTTPException(
+            status_code=400,
+            detail="Unsupported file type. Upload PDF, DOCX, or DOC."
+        )
+
+    try:
+        # 1️⃣ Save uploaded file to temp location
+        suffix = os.path.splitext(filename)[-1]
+
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            content = await file.read()
+            tmp.write(content)
+            tmp_path = tmp.name
+
+        # 2️⃣ Extract text using YOUR existing utilities
+        if filename.endswith(".pdf"):
+            text = extract_text_from_pdf(tmp_path)
+
+        elif filename.endswith(".docx"):
+            text = extract_text_from_docx(tmp_path)
+
+        elif filename.endswith(".doc"):
+            text = extract_text_from_doc(tmp_path)
+
+        else:
+            raise HTTPException(status_code=400, detail="Unsupported file")
+
+        # 3️⃣ Cleanup temp file
+        os.remove(tmp_path)
+
+        # 4️⃣ Validate extracted text
+        if not text or len(text.strip()) < 50:
+            raise HTTPException(
+                status_code=400,
+                detail="Could not extract sufficient text from file"
+            )
+
+        return {
+            "filename": file.filename,
+            "text": text
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Failed to process file: {str(e)}"
+        )
+        
+class JDFromURLRequest(BaseModel):
+    url: str = Field(..., min_length=10, example="https://example.com/...")
+
+def extract_with_requests(url: str) -> str:
+    """Fallback extraction using requests + BeautifulSoup"""
+    try:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        }
+        response = requests.get(url, headers=headers, timeout=10)
+        response.raise_for_status()
+        
+        soup = BeautifulSoup(response.text, 'html.parser')
+        
+        # Remove script and style elements
+        for script in soup(["script", "style", "nav", "footer", "header"]):
+            script.decompose()
+        
+        # Get text
+        text = soup.get_text()
+        
+        # Break into lines and remove leading/trailing space
+        lines = (line.strip() for line in text.splitlines())
+        # Break multi-headlines into a line each
+        chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
+        # Drop blank lines
+        text = '\n'.join(chunk for chunk in chunks if chunk)
+        
+        return text[:50000]  # Limit to 50k chars
+        
+    except Exception as e:
+        logger.error(f"[REQUESTS_FALLBACK] Failed: {e}")
+        return ""
+
+# @router.post("/jd-from-url")
+# def extract_jd_from_url(payload: JDFromURLRequest):
+#     """
+#     Accepts a job description URL
+#     Fetches + cleans readable JD text
+#     """
+#     url = payload.url
+
+#     if not url.startswith("http"):
+#         raise HTTPException(
+#             status_code=400,
+#             detail="Invalid URL"
+#         )
+
+#     try:
+#         logger.info(f"[JD URL] Fetching content from: {url}")
+        
+#         # Method 1: Try Tavily first
+#         raw_content = get_url_content_from_tavily(url)
+        
+#         # Method 2: If Tavily fails, try requests fallback
+#         if not raw_content or len(raw_content.strip()) < 100:
+#             logger.info(f"[JD URL] Tavily failed or returned short content, trying fallback...")
+#             raw_content = extract_with_requests(url)
+        
+#         logger.info(f"[JD URL] Raw content length: {len(raw_content)}")
+#         if raw_content:
+#             logger.info(f"[JD URL] First 500 chars: {raw_content[:500]}")
+#         else:
+#             logger.error(f"[JD URL] No content fetched from any method")
+
+#         if not raw_content or len(raw_content.strip()) < 100:
+#             logger.error(f"[JD URL] Insufficient content fetched: {len(raw_content) if raw_content else 0} chars")
+#             raise HTTPException(
+#                 status_code=400,
+#                 detail="Failed to fetch job description from URL or content too short"
+#             )
+
+#         cleaned_text = parse_markdown_to_plain_text(raw_content)
+#         cleaned_text = re.sub(r"\s{2,}", " ", cleaned_text)
+        
+#         logger.info(f"[JD URL] Cleaned text length: {len(cleaned_text)}")
+#         logger.info(f"[JD URL] Cleaned first 300 chars: {cleaned_text[:300]}")
+
+#         if len(cleaned_text.strip()) < 100:
+#             logger.error(f"[JD URL] Cleaned text too short: {len(cleaned_text.strip())} chars")
+#             raise HTTPException(
+#                 status_code=400,
+#                 detail="Extracted job description is too short"
+#             )
+
+#         return {
+#             "url": url,
+#             "job_description": cleaned_text
+#         }
+        
+#     except HTTPException:
+#         raise
+#     except Exception as e:
+#         logger.exception(f"[JD URL] Unexpected error processing URL: {url}")
+#         raise HTTPException(
+#             status_code=500,
+#             detail=f"Internal server error while processing URL: {str(e)}"
+#         )
+        
+        
+@router.post("/jd-from-url")
+async def extract_jd_from_url(payload: JDFromURLRequest):
+    """
+    Universal job description extractor for ANY website.
+    Replaces the old Tavily-based version.
+    """
+    url = payload.url
+
+    if not url.startswith("http"):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid URL"
+        )
+
+    try:
+        logger.info(f"[JD URL] Starting universal scraper for: {url}")
+        
+        # Use the new universal scraper
+        result = await get_job_description_from_url(url)
+        
+        job_description = result.get("job_description", "")
+        logger.info(f"[JD URL] Extracted {len(job_description)} chars")
+        
+        if not job_description or len(job_description.strip()) < 100:
+            raise HTTPException(
+                status_code=400,
+                detail="Could not extract sufficient job description from URL"
+            )
+        
+        # Optional: Add your existing cleaning if needed
+        from ...utils.text_cleaners import parse_markdown_to_plain_text
+        cleaned_description = parse_markdown_to_plain_text(job_description)
+        
+        return {
+            "url": url,
+            "job_description": cleaned_description,
+            "job_title": result.get("job_title", ""),
+            "company": result.get("company", ""),
+            "location": result.get("location", "")
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"[JD URL] Error processing {url}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to extract job description: {str(e)}"
+        )

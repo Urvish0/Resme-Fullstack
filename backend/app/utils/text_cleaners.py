@@ -15,13 +15,41 @@ from pylatexenc.latex2text import LatexNodes2Text
 #     text = remove_added_content(text)
 #     return text.strip()
 
-def clean_resume_response(response: str) -> str:
-    """
-    Simple cleaning function that removes common intro phrases but is conservative.
-    """
-    response = response.strip()
+# def clean_resume_response(response: str) -> str:
+#     """
+#     Simple cleaning function that removes common intro phrases but is conservative.
+#     """
+#     response = response.strip()
     
-    # Remove common intro lines (only if they're at the very beginning)
+#     # Remove common intro lines (only if they're at the very beginning)
+#     intro_phrases = [
+#         "Here's the improved professional resume in markdown format:",
+#         "Here is the improved professional resume:",
+#         "Improved Professional Resume:",
+#         "The improved resume:",
+#         "Here's the improved resume:",
+#         "Improved Resume:",
+#     ]
+    
+#     for phrase in intro_phrases:
+#         if response.lower().startswith(phrase.lower()):
+#             response = response[len(phrase):].strip()
+#             break
+    
+#     # Remove markdown code blocks if they wrap everything
+#     if response.startswith("```markdown"):
+#         response = response[11:].strip()
+#     elif response.startswith("```"):
+#         response = response[3:].strip()
+        
+#     if response.endswith("```"):
+#         response = response[:-3].strip()
+    
+#     return response
+
+def clean_resume_response(response: str) -> str:
+    response = response.strip()
+
     intro_phrases = [
         "Here's the improved professional resume in markdown format:",
         "Here is the improved professional resume:",
@@ -30,22 +58,21 @@ def clean_resume_response(response: str) -> str:
         "Here's the improved resume:",
         "Improved Resume:",
     ]
-    
+
     for phrase in intro_phrases:
         if response.lower().startswith(phrase.lower()):
             response = response[len(phrase):].strip()
             break
-    
-    # Remove markdown code blocks if they wrap everything
-    if response.startswith("```markdown"):
-        response = response[11:].strip()
-    elif response.startswith("```"):
-        response = response[3:].strip()
-        
-    if response.endswith("```"):
-        response = response[:-3].strip()
-    
+
+    # Only unwrap markdown fences if they wrap the FULL content
+    if response.startswith("```") and response.endswith("```"):
+        lines = response.splitlines()
+        if len(lines) > 2:
+            response = "\n".join(lines[1:-1]).strip()
+
     return response
+
+
 
 def remove_added_content(edited: str, original: str) -> str:
     """
@@ -70,25 +97,64 @@ def remove_added_content(edited: str, original: str) -> str:
     
     return '\n'.join(cleaned_lines)
 
+# def parse_markdown_to_plain_text(md_content: str) -> str:
+#     # 1. Split into lines and filter out Headers/Empty lines
+#     lines = [
+#         line.strip() 
+#         for line in md_content.split('\n') 
+#         if line.strip() and not line.startswith('#')
+#     ]
+    
+#     # 2. Join back into a single block of text
+#     text = "\n".join(lines)
+    
+#     # 3. Strip inline formatting using Regex
+#     # Removes Bold (**), Italics (* or _), and Inline Code (`)
+#     text = re.sub(r"\*\*(.*?)\*\*", r"\1", text)   # Bold
+#     text = re.sub(r"\*(.*?)\*", r"\1", text)       # Italics
+#     text = re.sub(r"_(.*?)_", r"\1", text)         # Italics (underscore)
+#     text = re.sub(r"`(.*?)`", r"\1", text)         # Inline Code
+    
+#     return text.strip()
+
 def parse_markdown_to_plain_text(md_content: str) -> str:
-    # 1. Split into lines and filter out Headers/Empty lines
-    lines = [
-        line.strip() 
-        for line in md_content.split('\n') 
-        if line.strip() and not line.startswith('#')
-    ]
+    """
+    Parse markdown OR plain text to clean plain text.
+    More robust version that handles both markdown and plain text.
+    """
+    if not md_content:
+        return ""
     
-    # 2. Join back into a single block of text
-    text = "\n".join(lines)
+    # 1. Remove HTML tags if present
+    md_content = re.sub(r'<[^>]+>', ' ', md_content)
     
-    # 3. Strip inline formatting using Regex
-    # Removes Bold (**), Italics (* or _), and Inline Code (`)
-    text = re.sub(r"\*\*(.*?)\*\*", r"\1", text)   # Bold
-    text = re.sub(r"\*(.*?)\*", r"\1", text)       # Italics
-    text = re.sub(r"_(.*?)_", r"\1", text)         # Italics (underscore)
-    text = re.sub(r"`(.*?)`", r"\1", text)         # Inline Code
+    # 2. Replace multiple whitespace characters with single space
+    md_content = re.sub(r'\s+', ' ', md_content)
     
-    return text.strip()
+    # 3. Remove markdown formatting if present
+    # Headers
+    md_content = re.sub(r'^#+\s+', '', md_content, flags=re.MULTILINE)
+    # Bold
+    md_content = re.sub(r'\*\*(.*?)\*\*', r'\1', md_content)
+    # Italics
+    md_content = re.sub(r'\*(.*?)\*', r'\1', md_content)
+    md_content = re.sub(r'_(.*?)_', r'\1', md_content)
+    # Inline code
+    md_content = re.sub(r'`(.*?)`', r'\1', md_content)
+    # Links
+    md_content = re.sub(r'\[([^\]]+)\]\([^\)]+\)', r'\1', md_content)
+    # Images
+    md_content = re.sub(r'!\[([^\]]*)\]\([^\)]+\)', '', md_content)
+    # Lists
+    md_content = re.sub(r'^\s*[-*+]\s+', '', md_content, flags=re.MULTILINE)
+    # Code blocks
+    md_content = re.sub(r'```.*?```', '', md_content, flags=re.DOTALL)
+    
+    # 4. Clean up extra whitespace
+    md_content = ' '.join(md_content.split())
+    
+    return md_content.strip()
+
 
 def extract_text_from_latex(latex_content: str) -> str:
     """
