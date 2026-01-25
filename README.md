@@ -178,10 +178,6 @@ See [http://localhost:8000/docs](http://localhost:8000/docs) for full API docume
 
 This project is licensed under the MIT License - see the LICENSE file for details.
 
-## 💬 Support
-
-For issues, questions, or suggestions, please open an issue on GitHub or refer to [PROJECT_CONTEXT.md](./PROJECT_CONTEXT.md) for detailed documentation.
-
 ---
 
 **Built with ❤️ as a production-grade AI portfolio project**
