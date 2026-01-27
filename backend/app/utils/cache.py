@@ -2,7 +2,7 @@ import hashlib
 import json
 import logging
 from redis.exceptions import RedisError
-from ..core.redis import redis_client
+from ..core.redis import redis_client, REDIS_AVAILABLE
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +19,9 @@ def make_cache_key(payload: dict) -> str:
 
 
 def get_cached_result(key: str):
+    if not REDIS_AVAILABLE or not redis_client:
+        return None
+    
     try:
         data = redis_client.get(key)
         if data:
@@ -35,6 +38,9 @@ def get_cached_result(key: str):
 
 
 def set_cached_result(key: str, value: dict):
+    if not REDIS_AVAILABLE or not redis_client:
+        return
+    
     try:
         redis_client.setex(key, CACHE_TTL, json.dumps(value))
         logger.info(f"[CACHE] Set for key: {key}")
