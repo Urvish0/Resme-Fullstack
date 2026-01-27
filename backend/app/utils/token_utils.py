@@ -2,17 +2,14 @@ import math
 
 AVG_CHARS_PER_TOKEN = 4
 
+
 def estimate_tokens(text: str) -> int:
     if not text:
         return 0
     return math.ceil(len(text) / AVG_CHARS_PER_TOKEN)
 
 
-def enforce_token_limit(
-    text: str,
-    max_tokens: int,
-    hard_truncate: bool = True
-) -> str:
+def enforce_token_limit(text: str, max_tokens: int, hard_truncate: bool = True) -> str:
     """
     Ensures text stays within max token limit.
     Truncates safely if needed.

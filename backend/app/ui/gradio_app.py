@@ -1,16 +1,15 @@
-import os
 import tempfile
 import gradio as gr
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
-from datetime import datetime 
+from datetime import datetime
 
-from ..core.config import settings
-from ..utils.file_parsers import extract_text_from_pdf, extract_text_from_docx, extract_text_from_doc, parse_uploaded_file
+from ..utils.file_parsers import (
+    parse_uploaded_file,
+)
 from ..core.llm import get_llm
 from ..workflows.resume_graph import build_resume_graph
 from ..services.workflow_service import stream_resume_workflow
 from ..services.resume_service import prepare_resume_state
-
 
 
 llm = get_llm()
@@ -52,23 +51,17 @@ def _normalize_chat_messages(msgs):
 
     return out
 
-def parse_uploaded_file(file):
-    """Helper to parse uploaded file content"""
-    if file is None:
-        return ""
-    try:
-        with open(file.name, 'r', encoding='utf-8') as f:
-            return f.read()
-    except UnicodeDecodeError:
-        with open(file.name, 'r', encoding='latin-1') as f:
-            return f.read()
 
-def run_workflow(job_description_raw: str, resume_file, resume_raw_content: str, resume_format: str):
+def run_workflow(
+    job_description_raw: str, resume_file, resume_raw_content: str, resume_format: str
+):
     """Run the workflow with user inputs"""
     # Combine file and text input for resume
     file_content = parse_uploaded_file(resume_file)
-    final_resume_content = file_content + "\n" + resume_raw_content if file_content else resume_raw_content
-    
+    final_resume_content = (
+        file_content + "\n" + resume_raw_content if file_content else resume_raw_content
+    )
+
     initial_state = {
         "messages": [HumanMessage(content="Optimize my resume!")],
         "job_description_raw": job_description_raw,
@@ -84,44 +77,49 @@ def run_workflow(job_description_raw: str, resume_file, resume_raw_content: str,
         "task_complete": False,
         "current_task": "",
         "old_ats_score": None,
-        "new_ats_score": None
+        "new_ats_score": None,
     }
-    
+
     # Run workflow
     output_state = None
     thread_id = "user_session"  # In a real app, generate unique session ID
-    
+
     messages = []
     for s in stream_resume_workflow(initial_state, thread_id):
         for key, value in s.items():
             if key != "__end__":
                 output_state = value
                 # Collect messages for output
-                if "messages" in value and len(value["messages"]) > len(initial_state["messages"]):
-                    new_msgs = value["messages"][len(initial_state["messages"]):]
+                if "messages" in value and len(value["messages"]) > len(
+                    initial_state["messages"]
+                ):
+                    new_msgs = value["messages"][len(initial_state["messages"]) :]
                     for msg in new_msgs:
                         if isinstance(msg, AIMessage):
                             messages.append((None, msg.content))
                         elif isinstance(msg, SystemMessage):
                             messages.append((None, f"System: {msg.content}"))
-    
+
     # Process final output
     if output_state:
         final_report = output_state.get("edited_resume_content", "No output generated")
         ats_improvement = f"ATS Score Improved from {output_state.get('old_ats_score', 'N/A')}% to {output_state.get('new_ats_score', 'N/A')}%"
-        
+
         # Add final messages
         messages.append((None, "Workflow completed!"))
         messages.append((None, ats_improvement))
-        
+
         # Save to temporary file for download
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.md', delete=False, encoding='utf-8') as f:
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".md", delete=False, encoding="utf-8"
+        ) as f:
             f.write(final_report)
             temp_path = f.name
-        
+
         return messages, final_report, temp_path
-    
+
     return [(None, "Error: No output generated")], "Error: No output generated", None
+
 
 custom_css = """
 /* Dashboard-compact theme */
@@ -231,16 +229,31 @@ custom_css = """
 
 """
 
-def create_dashboard_metrics(old_score=None, new_score=None, keywords_count=0, improvement=0):
+
+def create_dashboard_metrics(
+    old_score=None, new_score=None, keywords_count=0, improvement=0
+):
     """Create dashboard-style metrics with improved design"""
-    
+
     old_display = f"{old_score}%" if old_score is not None else "--"
     new_display = f"{new_score}%" if new_score is not None else "--"
-    improvement_display = f"+{improvement}%" if improvement > 0 else f"{improvement}%" if improvement < 0 else "0%"
-    
+    improvement_display = (
+        f"+{improvement}%"
+        if improvement > 0
+        else f"{improvement}%"
+        if improvement < 0
+        else "0%"
+    )
+
     improvement_icon = "📈" if improvement > 0 else "📊" if improvement == 0 else "📉"
-    improvement_class = "text-green-400" if improvement > 0 else "text-yellow-400" if improvement == 0 else "text-red-400"
-    
+    improvement_class = (
+        "text-green-400"
+        if improvement > 0
+        else "text-yellow-400"
+        if improvement == 0
+        else "text-red-400"
+    )
+
     return f"""
     <div class="dashboard-grid">
         <div class="card">
@@ -263,7 +276,7 @@ def create_dashboard_metrics(old_score=None, new_score=None, keywords_count=0, i
             <div class="metric">
                 <div class="metric-label">Improvement</div>
                 <div class="metric-value {improvement_class}">{improvement_display}</div>
-                <div class="metric-change">{improvement_icon} {'Better' if improvement > 0 else 'Same' if improvement == 0 else 'Review needed'}</div>
+                <div class="metric-change">{improvement_icon} {"Better" if improvement > 0 else "Same" if improvement == 0 else "Review needed"}</div>
             </div>
         </div>
         
@@ -277,14 +290,10 @@ def create_dashboard_metrics(old_score=None, new_score=None, keywords_count=0, i
     </div>
     """
 
+
 def safe_enhanced_run_workflow(
-    job_description_raw,
-    resume_file,
-    resume_raw_content,
-    resume_format
+    job_description_raw, resume_file, resume_raw_content, resume_format
 ):
-
-
     # ---- helper for guaranteed return shape ----
     def _fail(message: str):
         return (
@@ -294,7 +303,7 @@ def safe_enhanced_run_workflow(
             gr.update(visible=False),
             gr.update(visible=False),
             create_dashboard_metrics(),
-            get_status_message("🔴 Failed")
+            get_status_message("🔴 Failed"),
         )
 
     # ---- STEP 1: Prepare initial state via service ----
@@ -303,11 +312,11 @@ def safe_enhanced_run_workflow(
             job_description_raw=job_description_raw,
             resume_file=resume_file,
             resume_raw_content=resume_raw_content,
-            resume_format=resume_format
+            resume_format=resume_format,
         )
     except ValueError as e:
         return _fail(str(e))
-    except Exception as e:
+    except Exception:
         return _fail("Failed to prepare resume data.")
 
     # ---- STEP 2: Run streaming workflow via service ----
@@ -329,7 +338,7 @@ def safe_enhanced_run_workflow(
                     if isinstance(msg, AIMessage):
                         messages.append((None, msg.content))
 
-    except Exception as e:
+    except Exception:
         return _fail("Workflow execution failed.")
 
     # ---- STEP 3: Validate final state ----
@@ -345,16 +354,14 @@ def safe_enhanced_run_workflow(
     keywords = output_state.get("extracted_keywords", [])
 
     improvement = (
-        new_score - old_score
-        if old_score is not None and new_score is not None
-        else 0
+        new_score - old_score if old_score is not None and new_score is not None else 0
     )
 
     metrics_html = create_dashboard_metrics(
         old_score=old_score,
         new_score=new_score,
         keywords_count=len(keywords),
-        improvement=improvement
+        improvement=improvement,
     )
 
     # ---- STEP 5: FINAL GUARANTEED RETURN (7 outputs) ----
@@ -365,11 +372,10 @@ def safe_enhanced_run_workflow(
         gr.update(visible=bool(optimized_resume)),
         gr.update(visible=bool(cover_letter)),
         metrics_html,
-        get_status_message("🟢 Optimization completed")
+        get_status_message("🟢 Optimization completed"),
     )
 
 
-   
 def get_status_message(status):
     """Get styled status message"""
     if status.startswith("🟢"):
@@ -381,50 +387,60 @@ def get_status_message(status):
     else:
         return f'<div class="status status-info">{status}</div>'
 
+
 # Enhanced Gradio Interface with Dashboard Design
 with gr.Blocks(
-    title="AI Resume Optimizer Pro", 
+    title="AI Resume Optimizer Pro",
     css=custom_css,
-    theme=gr.themes.Default(primary_hue="indigo")
+    theme=gr.themes.Default(primary_hue="indigo"),
 ) as demo:
-    
     # Header Section
     with gr.Column(elem_classes=["header"]):
         gr.HTML("""
         <h1 class="header-title">AI Resume Optimizer Pro</h1>
         <p class="header-subtitle">Transform your resume with AI-powered ATS optimization and professional enhancement</p>
         """)
-    
+
     # Status indicator
     status_display = gr.HTML(
-        get_status_message("🔵 Ready to optimize your resume"),
-        elem_id="status-display"
+        get_status_message("🔵 Ready to optimize your resume"), elem_id="status-display"
     )
-    
+
     with gr.Row():
         # LEFT - Bento style input card
         with gr.Column(scale=1, elem_classes=["card"]):
-            gr.HTML('<div class="card-title"><i class="fas fa-edit"></i> Input Your Details</div>')
-            
+            gr.HTML(
+                '<div class="card-title"><i class="fas fa-edit"></i> Input Your Details</div>'
+            )
+
             # Job Description + Resume Format row
             with gr.Row():
                 jd_input = gr.Textbox(
                     label="Job Description / URL",
                     placeholder="Paste JD or URL...",
                     lines=6,
-                    elem_classes=["bento-box-item"]
+                    elem_classes=["bento-box-item"],
                 )
 
             with gr.Row():
                 with gr.Column(scale=1, elem_classes=["card"]):
-                    gr.HTML('<div class="card-title"><i class="fas fa-file-alt"></i> Resume Input</div>')
-                    
+                    gr.HTML(
+                        '<div class="card-title"><i class="fas fa-file-alt"></i> Resume Input</div>'
+                    )
+
                     with gr.Tabs():
                         with gr.Tab("📤 Upload Resume"):
                             resume_file = gr.File(
                                 label="Upload Resume",
-                                file_types=[".pdf", ".doc", ".docx", ".txt", ".md", ".tex"],
-                                elem_classes=["file-upload"]
+                                file_types=[
+                                    ".pdf",
+                                    ".doc",
+                                    ".docx",
+                                    ".txt",
+                                    ".md",
+                                    ".tex",
+                                ],
+                                elem_classes=["file-upload"],
                             )
                         with gr.Tab("✏️ Paste Resume"):
                             resume_input = gr.Textbox(
@@ -432,13 +448,13 @@ with gr.Blocks(
                                 placeholder="Paste your resume here...",
                                 lines=12,
                             )
-                    
+
                     # Resume format picker inside same card
                     format_radio = gr.Radio(
                         choices=["auto", "markdown", "pdf", "docx"],
                         label="Resume Format",
                         value="markdown",
-                        elem_classes=["resume-format-radio"]
+                        elem_classes=["resume-format-radio"],
                     )
 
                     with gr.Row():
@@ -450,49 +466,52 @@ with gr.Blocks(
             metrics_dashboard = gr.HTML(
                 create_dashboard_metrics(),
                 elem_id="metrics-dashboard",
-                elem_classes=["bento-metrics"]
+                elem_classes=["bento-metrics"],
             )
-            
+
             # Optimization Progress higher up
             with gr.Column(elem_classes=["card"]):
-                gr.HTML('<div class="card-title"><i class="fas fa-tasks"></i> Optimization Progress</div>')
-                chatbot = gr.Chatbot(
-                    value=[],
-                    height=250,
-                    show_label=False,
-                    elem_classes=["chatbot"]
+                gr.HTML(
+                    '<div class="card-title"><i class="fas fa-tasks"></i> Optimization Progress</div>'
                 )
-            
+                chatbot = gr.Chatbot(
+                    value=[], height=250, show_label=False, elem_classes=["chatbot"]
+                )
+
     # Results Section
     with gr.Row():
         # Optimized Resume
         with gr.Column(scale=1):
             with gr.Column(elem_classes=["card", "output"]):
-                gr.HTML('<div class="output-title"><i class="fas fa-file-alt"></i> Optimized Resume</div>')
+                gr.HTML(
+                    '<div class="output-title"><i class="fas fa-file-alt"></i> Optimized Resume</div>'
+                )
                 optimized_resume_output = gr.Markdown(
                     "Your optimized resume will appear here once processing is complete...",
-                    elem_classes=["markdown"]
+                    elem_classes=["markdown"],
                 )
                 resume_download = gr.DownloadButton(
                     "Download Resume",
                     visible=False,
-                    elem_classes=["btn", "btn-secondary"]
+                    elem_classes=["btn", "btn-secondary"],
                 )
-        
+
         # Cover Letter
         with gr.Column(scale=1):
             with gr.Column(elem_classes=["card", "output"]):
-                gr.HTML('<div class="output-title"><i class="fas fa-envelope"></i> Cover Letter</div>')
+                gr.HTML(
+                    '<div class="output-title"><i class="fas fa-envelope"></i> Cover Letter</div>'
+                )
                 cover_letter_output = gr.Markdown(
                     "Your personalized cover letter will be generated automatically...",
-                    elem_classes=["markdown"]
+                    elem_classes=["markdown"],
                 )
                 cover_letter_download = gr.DownloadButton(
                     "Download Cover Letter",
                     visible=False,
-                    elem_classes=["btn", "btn-secondary"]
+                    elem_classes=["btn", "btn-secondary"],
                 )
-    
+
     # Event Handlers
     def clear_all():
         return (
@@ -506,25 +525,25 @@ with gr.Blocks(
             gr.update(visible=False),  # resume download
             gr.update(visible=False),  # cover letter download
             create_dashboard_metrics(),  # metrics dashboard
-            get_status_message("🔵 Ready to optimize your resume")  # status
+            get_status_message("🔵 Ready to optimize your resume"),  # status
         )
-    
+
     # Connect event handlers
     submit_btn.click(
         fn=safe_enhanced_run_workflow,
         inputs=[jd_input, resume_file, resume_input, format_radio],
         outputs=[
-            chatbot, 
-            optimized_resume_output, 
+            chatbot,
+            optimized_resume_output,
             cover_letter_output,
-            resume_download, 
+            resume_download,
             cover_letter_download,
             metrics_dashboard,
-            status_display
+            status_display,
         ],
-        api_name="optimize_resume"
+        api_name="optimize_resume",
     )
-    
+
     clear_btn.click(
         fn=clear_all,
         outputs=[
@@ -538,8 +557,6 @@ with gr.Blocks(
             resume_download,
             cover_letter_download,
             metrics_dashboard,
-            status_display
-        ]
+            status_display,
+        ],
     )
-
-

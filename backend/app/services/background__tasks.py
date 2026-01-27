@@ -5,6 +5,7 @@ from ..core.idempotency import set_idempotent_job
 
 logger = logging.getLogger(__name__)
 
+
 def run_resume_job(job_id: str, state: dict, idempotency_key: str):
     try:
         # RUNNING

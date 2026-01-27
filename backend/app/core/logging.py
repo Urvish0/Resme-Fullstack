@@ -6,6 +6,7 @@ from contextvars import ContextVar
 
 request_id_ctx = ContextVar("request_id", default=None)
 
+
 class JsonFormatter(logging.Formatter):
     def format(self, record):
         log_record = {
@@ -13,9 +14,10 @@ class JsonFormatter(logging.Formatter):
             "level": record.levelname,
             "message": record.getMessage(),
             "module": record.module,
-            "request_id": request_id_ctx.get()
+            "request_id": request_id_ctx.get(),
         }
         return json.dumps(log_record)
+
 
 def setup_logging():
     handler = logging.StreamHandler(sys.stdout)

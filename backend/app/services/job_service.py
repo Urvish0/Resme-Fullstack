@@ -10,7 +10,9 @@ class JobStatus(str, Enum):
     SUCCESS = "success"
     FAILED = "failed"
 
+
 JOB_TTL_SECONDS = 60 * 10  # 10 minutes
+
 
 def set_job_status(
     job_id: str,
@@ -29,21 +31,23 @@ def set_job_status(
 
     if idempotency_key:
         payload["idempotency_key"] = idempotency_key
-    
+
     if parent_job_id:
         payload["parent_job_id"] = parent_job_id
-        
+
     redis_client.setex(
         f"job:{job_id}",
         JOB_TTL_SECONDS,
         json.dumps(payload),
     )
 
+
 def get_job_status(job_id: str) -> dict | None:
     raw = redis_client.get(f"job:{job_id}")
     if not raw:
         return None
     return json.loads(raw)
+
 
 def get_all_running_jobs() -> dict:
     """
@@ -63,4 +67,3 @@ def get_all_running_jobs() -> dict:
             running_jobs[job_id] = data
 
     return running_jobs
-

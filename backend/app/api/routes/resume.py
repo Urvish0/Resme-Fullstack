@@ -1,12 +1,11 @@
 from fastapi import (
-    APIRouter, 
-    HTTPException, 
-    Request, 
-    Header, 
+    APIRouter,
+    HTTPException,
+    Request,
+    Header,
     Query,
     UploadFile,
     File,
-    Body
 )
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -16,43 +15,33 @@ import uuid
 import threading
 import tempfile
 import os
-import re
 import requests
 from bs4 import BeautifulSoup
 
-from ...schemas.resume import (
-    ResumeOptimizeRequest,
-    ResumeOptimizeResponse
-)
-from ...services.resume_service import prepare_resume_state
+from ...schemas.resume import ResumeOptimizeRequest, ResumeOptimizeResponse
 from ...services.workflow_service import stream_resume_workflow
-from ...schemas.resume import ResumeOptimizeRequest
 from ...utils.token_guard import enforce_payload_limit
 from ...utils.token_utils import enforce_token_limit
 from ...core.model_limits import MODEL_LIMITS
 from ...services.rate_limiter import is_rate_limited
-from ...services.workflow_service import run_resume_workflow 
+from ...services.workflow_service import run_resume_workflow
 from ...utils.cache import (
     make_cache_key,
     get_cached_result,
     set_cached_result,
 )
-from ...utils.timing import Timer 
+from ...utils.timing import Timer
 from ...core.exceptions import SystemFailure
-from ...services.background__tasks import run_resume_job
-from ...services.job_service import (
-    JobStatus, 
-    set_job_status, 
-    get_job_status
-)
+from ...services.job_service import JobStatus, set_job_status, get_job_status
 from app.core.idempotency import (
     get_idempotent_job,
     set_idempotent_job,
 )
 from ...services.load_control import (
-    can_accept_job, 
-    increment_active_jobs, 
-    decrement_active_jobs)
+    can_accept_job,
+    increment_active_jobs,
+    decrement_active_jobs,
+)
 from ...observability.metrics import (
     API_REQUESTS_TOTAL,
     API_ERRORS_TOTAL,
@@ -63,17 +52,15 @@ from ...observability.metrics import (
     JOBS_STARTED_TOTAL,
     JOBS_COMPLETED_TOTAL,
     JOBS_FAILED_TOTAL,
-    JOB_DURATION_SECONDS
+    JOB_DURATION_SECONDS,
 )
 from time import perf_counter
 from ...utils.file_parsers import (
     extract_text_from_pdf,
     extract_text_from_docx,
-    extract_text_from_doc
+    extract_text_from_doc,
 )
-from ...utils.web_scraper import get_url_content_from_tavily
-from ...utils.text_cleaners import parse_markdown_to_plain_text
-from ...services.universal_scraper import get_job_description_from_url  
+from ...services.universal_scraper import get_job_description_from_url
 from ...utils.text_cleaners import clean_resume_response
 
 
@@ -85,126 +72,118 @@ MAX_INPUT = LIMITS["max_input_tokens"] - LIMITS["safety_margin"]
 
 router = APIRouter(prefix="/optimize", tags=["Resume"])
 
+
 @router.post("", response_model=ResumeOptimizeResponse)
 def optimize_resume(payload: ResumeOptimizeRequest, request: Request):
-        
-        logger.info("[API] Optimize resume request started")
-        
-        client_ip = request.client.host
+    logger.info("[API] Optimize resume request started")
 
-        if is_rate_limited(client_ip):
-            logger.warning(f"[API] Rate limit exceeded for IP: {client_ip}")
-            raise HTTPException(
-                status_code=429,
-                detail="Too many requests. Please try again later."
+    client_ip = request.client.host
+
+    if is_rate_limited(client_ip):
+        logger.warning(f"[API] Rate limit exceeded for IP: {client_ip}")
+        raise HTTPException(
+            status_code=429, detail="Too many requests. Please try again later."
+        )
+
+    cache_payload = {
+        "resume": payload.resume_text,
+        "jd": payload.job_description,
+        "format": payload.resume_format,
+    }
+
+    cache_key = make_cache_key(cache_payload)
+
+    with Timer("cache_lookup"):
+        cached = get_cached_result(cache_key)
+
+    if cached:
+        logger.info("[API] Returning cached result, cache_hit")
+        return cached
+
+    job_description = enforce_token_limit(
+        payload.job_description, max_tokens=MAX_INPUT // 2
+    )
+
+    resume_text = enforce_token_limit(payload.resume_text, max_tokens=MAX_INPUT // 2)
+
+    initial_state = {
+        "job_description_raw": job_description,
+        "resume_raw_content": resume_text,
+        "resume_format": payload.resume_format,
+    }
+
+    with Timer("workflow_execution"):
+        try:
+            result = run_resume_workflow(initial_state)
+        except Exception as e:
+            logger.exception("[WORKFLOW] Failed")
+            raise SystemFailure(
+                message="Resume optimization workflow failed",
+                details={"***REASON***": str(e)},
             )
-            
-        cache_payload = {
-            "resume": payload.resume_text,
-            "jd": payload.job_description,
-            "format": payload.resume_format,
-        }
 
-        cache_key = make_cache_key(cache_payload)
-        
-        with Timer("cache_lookup"):
-            cached = get_cached_result(cache_key)
-        
-        if cached:
-            logger.info("[API] Returning cached result, cache_hit")
-            return cached
+    # Validate and clean results - ensure we have valid data
+    optimized_resume = clean_resume_response(result.get("optimized_resume", ""))
 
-        job_description = enforce_token_limit(
-            payload.job_description,
-            max_tokens=MAX_INPUT // 2
-        )
+    # Safety check - if resume is empty after cleaning, return original
+    if not optimized_resume or len(optimized_resume.strip()) < 50:
+        logger.warning("[API] Optimized resume empty or too short, using original")
+        optimized_resume = resume_text
 
-        resume_text = enforce_token_limit(
-            payload.resume_text,
-            max_tokens=MAX_INPUT // 2
-        )
-        
-        initial_state = {
-            "job_description_raw": job_description,
-            "resume_raw_content": resume_text,
-            "resume_format": payload.resume_format,
-        }
-        
-        with Timer("workflow_execution"):
-            try:
-                result = run_resume_workflow(initial_state)
-            except Exception as e:
-                logger.exception("[WORKFLOW] Failed")
-                raise SystemFailure(
-                    message="Resume optimization workflow failed",
-                    details={"***REASON***": str(e)}
-                )
-        
-        # Validate and clean results - ensure we have valid data
-        optimized_resume = clean_resume_response(
-            result.get("optimized_resume", "")
-        )
-        
-        # Safety check - if resume is empty after cleaning, return original
-        if not optimized_resume or len(optimized_resume.strip()) < 50:
-            logger.warning("[API] Optimized resume empty or too short, using original")
-            optimized_resume = resume_text
-        
-        # Ensure ATS scores are present and valid
-        old_ats_score = result.get("old_ats_score")
-        new_ats_score = result.get("new_ats_score")
-        
-        # Validate ATS scores are integers between 0-100
-        if old_ats_score is not None and not isinstance(old_ats_score, int):
-            try:
-                old_ats_score = int(old_ats_score)
-            except (ValueError, TypeError):
-                logger.warning("[API] Invalid old_ats_score format")
-                old_ats_score = None
-        
-        if new_ats_score is not None and not isinstance(new_ats_score, int):
-            try:
-                new_ats_score = int(new_ats_score)
-            except (ValueError, TypeError):
-                logger.warning("[API] Invalid new_ats_score format")
-                new_ats_score = None
-        
-        # Ensure scores are within valid range
-        if old_ats_score is not None and (old_ats_score < 0 or old_ats_score > 100):
-            logger.warning(f"[API] old_ats_score out of range: {old_ats_score}")
+    # Ensure ATS scores are present and valid
+    old_ats_score = result.get("old_ats_score")
+    new_ats_score = result.get("new_ats_score")
+
+    # Validate ATS scores are integers between 0-100
+    if old_ats_score is not None and not isinstance(old_ats_score, int):
+        try:
+            old_ats_score = int(old_ats_score)
+        except (ValueError, TypeError):
+            logger.warning("[API] Invalid old_ats_score format")
             old_ats_score = None
-        
-        if new_ats_score is not None and (new_ats_score < 0 or new_ats_score > 100):
-            logger.warning(f"[API] new_ats_score out of range: {new_ats_score}")
+
+    if new_ats_score is not None and not isinstance(new_ats_score, int):
+        try:
+            new_ats_score = int(new_ats_score)
+        except (ValueError, TypeError):
+            logger.warning("[API] Invalid new_ats_score format")
             new_ats_score = None
 
-        response = ResumeOptimizeResponse(
-            optimized_resume=optimized_resume,
-            cover_letter=result.get("cover_letter_text", ""),
-            old_ats_score=old_ats_score,
-            new_ats_score=new_ats_score,
-            extracted_keywords=result.get("extracted_keywords", [])
-        )
+    # Ensure scores are within valid range
+    if old_ats_score is not None and (old_ats_score < 0 or old_ats_score > 100):
+        logger.warning(f"[API] old_ats_score out of range: {old_ats_score}")
+        old_ats_score = None
 
-        set_cached_result(cache_key, response.model_dump())
-        
-        logger.info("[API] Optimize resume request completed")
-        return response
+    if new_ats_score is not None and (new_ats_score < 0 or new_ats_score > 100):
+        logger.warning(f"[API] new_ats_score out of range: {new_ats_score}")
+        new_ats_score = None
 
-@router.post("/stream") #For SSE streaming (server sent event)
+    response = ResumeOptimizeResponse(
+        optimized_resume=optimized_resume,
+        cover_letter=result.get("cover_letter_text", ""),
+        old_ats_score=old_ats_score,
+        new_ats_score=new_ats_score,
+        extracted_keywords=result.get("extracted_keywords", []),
+    )
+
+    set_cached_result(cache_key, response.model_dump())
+
+    logger.info("[API] Optimize resume request completed")
+    return response
+
+
+@router.post("/stream")  # For SSE streaming (server sent event)
 def optimize_resume_stream(payload: ResumeOptimizeRequest, request: Request):
-
     logger.info("[API] Stream optimize resume request started")
-    
+
     client_ip = request.client.host
-    
+
     if is_rate_limited(client_ip):
         logger.warning(f"[API] Stream rate limit exceeded for IP: {client_ip}")
         raise HTTPException(
-            status_code=429,
-            detail="Too many requests. Please try again later."
+            status_code=429, detail="Too many requests. Please try again later."
         )
-        
+
     def event_generator():
         # Pre-flight token guard
         initial_state = {
@@ -215,10 +194,7 @@ def optimize_resume_stream(payload: ResumeOptimizeRequest, request: Request):
 
         # Stream workflow steps
         try:
-            for step in stream_resume_workflow(
-                initial_state,
-                thread_id="sse_call"
-            ):
+            for step in stream_resume_workflow(initial_state, thread_id="sse_call"):
                 yield f"data: {json.dumps(step)}\n\n"
 
             # 3️⃣ Explicit completion signal
@@ -228,15 +204,14 @@ def optimize_resume_stream(payload: ResumeOptimizeRequest, request: Request):
             yield f"data: {json.dumps({'error': str(e)})}\n\n"
 
     logger.info("[API] Stream optimize resume request completed")
-    return StreamingResponse(
-        event_generator(),
-        media_type="text/event-stream"
-    )
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
+
 
 class OptimizeAsyncRequest(BaseModel):
     job_description: str = Field(min_length=50)
     resume_text: str = Field(min_length=50)
     resume_format: str = "markdown"
+
 
 @router.post("/async")
 def optimize_resume_async(
@@ -260,7 +235,7 @@ def optimize_resume_async(
     if idem_entry:
         status = idem_entry["status"]
         parent_job_id = idem_entry["job_id"]
-        
+
         if status == JobStatus.FAILED and retry:
             logger.info(
                 f"[RETRY] Retrying failed job {parent_job_id}",
@@ -268,7 +243,7 @@ def optimize_resume_async(
             )
         else:
             logger.info(
-                f"[IDEMPOTENCY] Replay detected",
+                "[IDEMPOTENCY] Replay detected",
                 extra={"request_id": request_id},
             )
             return {
@@ -276,7 +251,7 @@ def optimize_resume_async(
                 "status": status,
                 "source": "idempotent_replay",
             }
-    
+
     if not can_accept_job():
         logger.warning(
             "[LOAD CONTROL] System overloaded - rejecting async job",
@@ -284,7 +259,7 @@ def optimize_resume_async(
         )
         raise HTTPException(
             status_code=429,
-            detail="System is currently overloaded. Please try again later."
+            detail="System is currently overloaded. Please try again later.",
         )
 
     # 2️ CREATE NEW JOB
@@ -302,9 +277,9 @@ def optimize_resume_async(
         job_id,
         JobStatus.PENDING,
     )
-    
+
     set_job_status(
-        job_id, 
+        job_id,
         JobStatus.PENDING,
         parent_job_id=parent_job_id,
     )
@@ -317,28 +292,28 @@ def optimize_resume_async(
             increment_active_jobs()
             JOBS_STARTED_TOTAL.inc()
             JOBS_ACTIVE.inc()
-            
+
             API_REQUESTS_TOTAL.labels(
-                    "/optimize/async",
-                    "POST",
-                    "started",
-                ).inc()
+                "/optimize/async",
+                "POST",
+                "started",
+            ).inc()
 
             set_job_status(job_id, JobStatus.RUNNING, idempotency_key=idempotency_key)
             set_idempotent_job(idempotency_key, job_id, JobStatus.RUNNING)
 
             with API_REQUEST_DURATION.labels(
-                    "/optimize/async",
-                    "POST",
-                ).time():
+                "/optimize/async",
+                "POST",
+            ).time():
                 result = run_resume_workflow(initial_state)
 
             ### JOB COMPLETED ###
             API_REQUESTS_TOTAL.labels(
-                    "/optimize/async",
-                    "POST",
-                    "success",
-                ).inc()
+                "/optimize/async",
+                "POST",
+                "success",
+            ).inc()
 
             set_job_status(
                 job_id,
@@ -346,7 +321,7 @@ def optimize_resume_async(
                 result=result,
                 idempotency_key=idempotency_key,
             )
-            
+
             JOBS_COMPLETED_TOTAL.inc()
 
             set_idempotent_job(
@@ -361,17 +336,17 @@ def optimize_resume_async(
                 "[ASYNC_JOB] Failed",
                 extra={"request_id": request_id},
             )
-            
+
             API_ERRORS_TOTAL.labels(
-                    "/optimize/async",
-                    "POST",
-                ).inc()
-            
+                "/optimize/async",
+                "POST",
+            ).inc()
+
             API_REQUESTS_TOTAL.labels(
-                    "/optimize/async",
-                    "POST",
-                    "failed",
-                ).inc()
+                "/optimize/async",
+                "POST",
+                "failed",
+            ).inc()
 
             JOBS_FAILED_TOTAL.inc()
 
@@ -381,7 +356,7 @@ def optimize_resume_async(
                 error=str(e),
                 idempotency_key=idempotency_key,
             )
-            
+
             set_idempotent_job(
                 idempotency_key,
                 job_id,
@@ -405,6 +380,7 @@ def optimize_resume_async(
         "retry_of": parent_job_id,
     }
 
+
 @router.get("/status/{job_id}")
 def get_async_status(job_id: str):
     job = get_job_status(job_id)
@@ -414,14 +390,14 @@ def get_async_status(job_id: str):
 
     return job
 
+
 @router.post("/upload")
 async def upload_resume(file: UploadFile = File(...)):
     filename = file.filename.lower()
 
     if not filename.endswith((".pdf", ".docx", ".doc")):
         raise HTTPException(
-            status_code=400,
-            detail="Unsupported file type. Upload PDF, DOCX, or DOC."
+            status_code=400, detail="Unsupported file type. Upload PDF, DOCX, or DOC."
         )
 
     try:
@@ -452,56 +428,52 @@ async def upload_resume(file: UploadFile = File(...)):
         # 4️⃣ Validate extracted text
         if not text or len(text.strip()) < 50:
             raise HTTPException(
-                status_code=400,
-                detail="Could not extract sufficient text from file"
+                status_code=400, detail="Could not extract sufficient text from file"
             )
 
-        return {
-            "filename": file.filename,
-            "text": text
-        }
+        return {"filename": file.filename, "text": text}
 
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Failed to process file: {str(e)}"
-        )
-        
+        raise HTTPException(status_code=400, detail=f"Failed to process file: {str(e)}")
+
+
 class JDFromURLRequest(BaseModel):
     url: str = Field(..., min_length=10, example="https://example.com/...")
+
 
 def extract_with_requests(url: str) -> str:
     """Fallback extraction using requests + BeautifulSoup"""
     try:
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
         }
         response = requests.get(url, headers=headers, timeout=10)
         response.raise_for_status()
-        
-        soup = BeautifulSoup(response.text, 'html.parser')
-        
+
+        soup = BeautifulSoup(response.text, "html.parser")
+
         # Remove script and style elements
         for script in soup(["script", "style", "nav", "footer", "header"]):
             script.decompose()
-        
+
         # Get text
         text = soup.get_text()
-        
+
         # Break into lines and remove leading/trailing space
         lines = (line.strip() for line in text.splitlines())
         # Break multi-headlines into a line each
         chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
         # Drop blank lines
-        text = '\n'.join(chunk for chunk in chunks if chunk)
-        
+        text = "\n".join(chunk for chunk in chunks if chunk)
+
         return text[:50000]  # Limit to 50k chars
-        
+
     except Exception as e:
         logger.error(f"[REQUESTS_FALLBACK] Failed: {e}")
         return ""
+
 
 # @router.post("/jd-from-url")
 # def extract_jd_from_url(payload: JDFromURLRequest):
@@ -519,15 +491,15 @@ def extract_with_requests(url: str) -> str:
 
 #     try:
 #         logger.info(f"[JD URL] Fetching content from: {url}")
-        
+
 #         # Method 1: Try Tavily first
 #         raw_content = get_url_content_from_tavily(url)
-        
+
 #         # Method 2: If Tavily fails, try requests fallback
 #         if not raw_content or len(raw_content.strip()) < 100:
 #             logger.info(f"[JD URL] Tavily failed or returned short content, trying fallback...")
 #             raw_content = extract_with_requests(url)
-        
+
 #         logger.info(f"[JD URL] Raw content length: {len(raw_content)}")
 #         if raw_content:
 #             logger.info(f"[JD URL] First 500 chars: {raw_content[:500]}")
@@ -543,7 +515,7 @@ def extract_with_requests(url: str) -> str:
 
 #         cleaned_text = parse_markdown_to_plain_text(raw_content)
 #         cleaned_text = re.sub(r"\s{2,}", " ", cleaned_text)
-        
+
 #         logger.info(f"[JD URL] Cleaned text length: {len(cleaned_text)}")
 #         logger.info(f"[JD URL] Cleaned first 300 chars: {cleaned_text[:300]}")
 
@@ -558,7 +530,7 @@ def extract_with_requests(url: str) -> str:
 #             "url": url,
 #             "job_description": cleaned_text
 #         }
-        
+
 #     except HTTPException:
 #         raise
 #     except Exception as e:
@@ -567,8 +539,8 @@ def extract_with_requests(url: str) -> str:
 #             status_code=500,
 #             detail=f"Internal server error while processing URL: {str(e)}"
 #         )
-        
-        
+
+
 @router.post("/jd-from-url")
 async def extract_jd_from_url(payload: JDFromURLRequest):
     """
@@ -578,43 +550,40 @@ async def extract_jd_from_url(payload: JDFromURLRequest):
     url = payload.url
 
     if not url.startswith("http"):
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid URL"
-        )
+        raise HTTPException(status_code=400, detail="Invalid URL")
 
     try:
         logger.info(f"[JD URL] Starting universal scraper for: {url}")
-        
+
         # Use the new universal scraper
         result = await get_job_description_from_url(url)
-        
+
         job_description = result.get("job_description", "")
         logger.info(f"[JD URL] Extracted {len(job_description)} chars")
-        
+
         if not job_description or len(job_description.strip()) < 100:
             raise HTTPException(
                 status_code=400,
-                detail="Could not extract sufficient job description from URL"
+                detail="Could not extract sufficient job description from URL",
             )
-        
+
         # Optional: Add your existing cleaning if needed
         from ...utils.text_cleaners import parse_markdown_to_plain_text
+
         cleaned_description = parse_markdown_to_plain_text(job_description)
-        
+
         return {
             "url": url,
             "job_description": cleaned_description,
             "job_title": result.get("job_title", ""),
             "company": result.get("company", ""),
-            "location": result.get("location", "")
+            "location": result.get("location", ""),
         }
-        
+
     except HTTPException:
         raise
     except Exception as e:
         logger.exception(f"[JD URL] Error processing {url}: {e}")
         raise HTTPException(
-            status_code=500,
-            detail=f"Failed to extract job description: {str(e)}"
+            status_code=500, detail=f"Failed to extract job description: {str(e)}"
         )

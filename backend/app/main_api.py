@@ -9,10 +9,7 @@ from .api.routes.metrics import router as metrics_router
 
 setup_logging()
 
-app = FastAPI(
-    title="ResMe API",
-    version="1.0.0"
-)
+app = FastAPI(title="ResMe API", version="1.0.0")
 
 app.add_middleware(
     CORSMiddleware,

@@ -6,17 +6,15 @@ from langchain_core.messages import HumanMessage
 from ..utils.file_parsers import (
     extract_text_from_pdf,
     extract_text_from_docx,
-    extract_text_from_doc
+    extract_text_from_doc,
 )
 from ..core.exceptions import UserInputError, SystemFailure
 
 logger = logging.getLogger(__name__)
- 
+
+
 def prepare_resume_state(
-    job_description_raw: str,
-    resume_file,
-    resume_raw_content: str,
-    resume_format: str
+    job_description_raw: str, resume_file, resume_raw_content: str, resume_format: str
 ) -> Dict[str, Any]:
     """
     Prepare and validate the initial LangGraph state.
@@ -24,9 +22,12 @@ def prepare_resume_state(
     """
 
     logger.info("[RESUME_SERVICE] Preparing resume state")
-    
+
     if not job_description_raw or not job_description_raw.strip():
-        logger.warning("[RESUME_SERVICE] Job description is required", extra={"error_type": "user_error"})
+        logger.warning(
+            "[RESUME_SERVICE] Job description is required",
+            extra={"error_type": "user_error"},
+        )
         raise UserInputError("Job description is required")
 
     final_resume_content = ""
@@ -50,10 +51,12 @@ def prepare_resume_state(
             elif ext == ".doc":
                 final_resume_content = extract_text_from_doc(path)
         except Exception as e:
-            logger.exception("[RESUME_SERVICE] File parsing failed", extra={"error_type": "system_error"})
+            logger.exception(
+                "[RESUME_SERVICE] File parsing failed",
+                extra={"error_type": "system_error"},
+            )
             raise SystemFailure(
-                message="Resume file parsing failed",
-                details={"reason": str(e)}
+                message="Resume file parsing failed", details={"reason": str(e)}
             )
 
     # Append pasted resume content
@@ -65,11 +68,14 @@ def prepare_resume_state(
         )
 
     if not final_resume_content.strip():
-        logger.warning("[RESUME_SERVICE] Resume content is required", extra={"error_type": "user_error"})
+        logger.warning(
+            "[RESUME_SERVICE] Resume content is required",
+            extra={"error_type": "user_error"},
+        )
         raise UserInputError("Resume content is required")
 
     logger.info("[RESUME_SERVICE] State prepared successfully")
-    
+
     return {
         "messages": [HumanMessage(content="Optimize my resume!")],
         "job_description_raw": job_description_raw,

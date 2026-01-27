@@ -76,8 +76,6 @@
 #         return ""
 
 
-
-
 # # Backwards-compatibility: allow callers to use `.invoke(...)` on this function.
 # try:
 #     get_url_content_from_tavily.invoke = get_url_content_from_tavily
@@ -93,6 +91,7 @@ logger = logging.getLogger(__name__)
 # Initialize Tavily client with better error handling
 tavily_client = None
 
+
 def init_tavily_client():
     """Initialize Tavily client with proper error logging"""
     global tavily_client
@@ -101,18 +100,20 @@ def init_tavily_client():
         if not api_key:
             logger.error("[TAVILY] API key not found in settings")
             return False
-            
+
         tavily_client = TavilyClient(api_key=api_key)
         logger.info("[TAVILY] Client initialized successfully")
         return True
-        
+
     except Exception as e:
         logger.exception(f"[TAVILY] Failed to initialize client: {e}")
         tavily_client = None
         return False
 
+
 # Initialize on module import
 init_tavily_client()
+
 
 def get_url_content_from_tavily(url: str) -> str:
     """
@@ -122,32 +123,34 @@ def get_url_content_from_tavily(url: str) -> str:
         logger.error("[TAVILY] Client not initialized")
         if not init_tavily_client():
             return ""
-    
+
     try:
         logger.info(f"[TAVILY] Extracting content from: {url}")
-        
+
         # Try with default parameters first
         response = tavily_client.extract(
             urls=[url],
             # Try without include_raw_content first
         )
-        
+
         logger.info(f"[TAVILY] Response type: {type(response)}")
-        logger.info(f"[TAVILY] Response keys: {list(response.keys()) if isinstance(response, dict) else 'Not a dict'}")
-        
+        logger.info(
+            f"[TAVILY] Response keys: {list(response.keys()) if isinstance(response, dict) else 'Not a dict'}"
+        )
+
         # Defensive checks
         if not isinstance(response, dict):
             logger.error(f"[TAVILY] Response is not a dict: {type(response)}")
             return ""
-        
+
         results = response.get("results")
         if not results or not isinstance(results, list):
             logger.error(f"[TAVILY] No results in response or not a list: {results}")
             return ""
-        
+
         first = results[0]
         logger.info(f"[TAVILY] First result keys: {list(first.keys())}")
-        
+
         # Try to get content in multiple ways
         content = ""
         if "content" in first:
@@ -159,7 +162,7 @@ def get_url_content_from_tavily(url: str) -> str:
         elif "text" in first:
             content = first.get("text", "")
             logger.info(f"[TAVILY] Got 'text' field: {len(content)} chars")
-        
+
         if content:
             content = content.strip()
             logger.info(f"[TAVILY] Final content length: {len(content)}")
@@ -169,10 +172,11 @@ def get_url_content_from_tavily(url: str) -> str:
             # Log the entire first result for debugging
             logger.debug(f"[TAVILY] First result: {first}")
             return ""
-            
+
     except Exception as e:
         logger.exception(f"[TAVILY] Extract failed for URL {url}: {e}")
         return ""
+
 
 # Backwards-compatibility: allow callers to use `.invoke(...)` on this function.
 try:
