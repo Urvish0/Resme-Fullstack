@@ -26,15 +26,18 @@ jobs:
           pip install -r requirements.txt
           pip install ruff mypy pytest pytest-cov
 
+      - name: Auto-format code (ruff)
+        run: ruff format backend
+
+      - name: Auto-fix linting issues (ruff)
+        run: ruff check backend --fix
+
       - name: Type check (mypy)
         run: mypy backend --ignore-missing-imports || true
 
-      - name: Lint (ruff)
+      - name: Lint check (ruff)
         run: ruff check backend
         continue-on-error: false
-
-      - name: Format check (ruff)
-        run: ruff format backend --check || true
 
       - name: Run tests (pytest)
         run: pytest backend/tests -v --tb=short 2>/dev/null || echo "No tests found (optional)"
