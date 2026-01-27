@@ -179,11 +179,29 @@ def keyword_extraction_node(state: ResumeOptimizationState) -> ResumeOptimizatio
     messages.append(HumanMessage(content="Node: `keyword_extraction_node` - Initiating keyword extraction from job description.").model_dump())
 
     prompt = (
-        "You are an expert keyword extractor. "
-        "Analyze the following job description and identify the most important skills, technologies, and responsibilities. Return a list of UNIQUE keywords only, Do NOT repeat concepts or keywords"
-        "List them as comma-separated values. Focus on actionable keywords that would be used in a resume.\n\n"
-        f"Job Description:\n{job_description}\n\n"
-        "Keywords (comma-separated):"
+        "TASK: Extract high-impact ATS keywords from this job description (15-25 total).\n\n"
+        "OUTPUT FORMAT:\n"
+        "Comma-separated keywords, most important first. NO preamble, NO explanation.\n\n"
+        "KEYWORD TYPES - INCLUDE:\n"
+        "- Technical Languages: Python 3.8+, TypeScript, Java, C++\n"
+        "- Frameworks: React, FastAPI, Django, Spring, Vue\n"
+        "- Cloud & DevOps: AWS, Azure, Docker, Kubernetes, CI/CD\n"
+        "- Databases: PostgreSQL, MongoDB, Redis, Elasticsearch\n"
+        "- Methodologies: Agile, Scrum, TDD, Microservices\n"
+        "- Certifications: AWS Solutions Architect, Google Cloud, Salesforce\n\n"
+        "STRICTLY EXCLUDE (NEVER include):\n"
+        "- Soft skills: communication, leadership, teamwork, motivation\n"
+        "- Vague adjectives: strong, experienced, excellent, proven\n"
+        "- Business jargon: solutions, services, innovation, synergy\n"
+        "- Company/location names: [specific company names], cities\n"
+        "- Generic metrics: years of experience, performance\n\n"
+        "SELECTION RULES:\n"
+        "1. Pick most specific term: 'Machine Learning' > 'ML' + 'Artificial Intelligence'\n"
+        "2. Use exact phrases from JD: copy-paste preferred\n"
+        "3. Only standard abbreviations: AWS (yes), SK (no unless stated)\n"
+        "4. Order by: Seniority requirement → Specificity → Frequency in JD\n\n"
+        f"{job_description}\n\n"
+        "KEYWORDS (comma-separated, most important first):"
     )
     messages.append(AIMessage(content=f"Sub-task: Sending prompt to LLM for keyword extraction. Prompt snippet: '{prompt[:100]}...'").model_dump())
     logger.info("[LLM] Call started: keyword_extraction")
@@ -227,17 +245,31 @@ def resume_analysis_node(state: ResumeOptimizationState) -> ResumeOptimizationSt
     messages.append(HumanMessage(content="Node: `resume_analysis_node` - Starting resume analysis against job description and keywords.").model_dump())
 
     prompt = (
-        "You are a professional resume analyst. "
-        "Compare the following resume content with the job description and the extracted keywords. "
-        "Provide a detailed report on:\n"
-        "**ATS Score: [Your Estimated Score 0-100%]**\n"
-        "1. Missing keywords/skills from the resume that are present in the JD.\n"
-        "2. Areas where the resume can be strengthened to better align with the JD.\n"
-        "3. Suggestions for rephrasing or adding content to highlight relevant experience.\n\n"
+        "TASK: Analyze resume's ATS match to target job. Score 0-100%.\n\n"
+        "ANALYSIS RULES - DO:\n"
+        "- Count exact target keywords + reasonable variations (e.g., 'Python 3.8' matches 'Python')\n"
+        "- Map keywords to resume sections (Title, Summary, Bullets, Skills)\n"
+        "- Assess section structure: clear headings, logical flow\n"
+        "- Identify legitimate rephrasing/reordering opportunities only\n\n"
+        "ANALYSIS RULES - NEVER:\n"
+        "- Suggest adding any skills/tech NOT explicitly in resume\n"
+        "- Recommend new certs, degrees, or experience not present\n"
+        "- Propose any fabrication of metrics, dates, or companies\n"
+        "- Add soft-skill language (teamwork, communication, etc.)\n\n"
+        "SCORING METHODOLOGY (Transparent Breakdown):\n"
+        "- Keyword Coverage (40%): Found / Total Target Keywords\n"
+        "- Keyword Placement (30%): Prominence of keywords (title > summary > bullets)\n"
+        "- Relevance Match (20%): Skills/experience align with JD responsibilities\n"
+        "- ATS Structure (10%): Clear sections, no formatting tricks, readable format\n\n"
+        "OUTPUT FORMAT (EXACT STRUCTURE):\n"
+        "**ATS Score: [XX]%** (e.g., **ATS Score: 62%**)\n"
+        "**Found Keywords:** [comma-separated list, in order of importance]\n"
+        "**Missing Keywords:** [comma-separated list]\n"
+        "**Legitimate Improvements:** [bullets with ONLY rephrasing/reordering suggestions]\n\n"
+        f"Target Keywords: {', '.join(keywords)}\n\n"
+        f"Resume:\n{resume_text}\n\n"
         f"Job Description:\n{job_description}\n\n"
-        f"Extracted Keywords:\n{', '.join(keywords)}\n\n"
-        f"Resume Content:\n{resume_text}\n\n"
-        "Analysis Report:"
+        "START ANALYSIS:"
     )
     messages.append(AIMessage(content=f"Sub-task: Sending prompt to LLM for initial resume analysis. Prompt snippet: '{prompt[:100]}...'").model_dump())
     logger.info("[LLM] Call started: resume_analysis")
@@ -319,24 +351,62 @@ def resume_editing_node(state: ResumeOptimizationState) -> ResumeOptimizationSta
 
     messages.append(HumanMessage(content="Node: `resume_editing_node` - Generating professionally enhanced version of the resume.").model_dump())
 
-    # Simplified, more direct prompt with strict anti-hallucination rules
-    editing_instructions = f"""Improve this resume to make it more professional and ATS-friendly while keeping all original information accurate.
+    editing_instructions = f"""TASK: Optimize resume for ATS matching. ONLY legitimate improvements. NO fabrication.
 
-RULES:
-- Keep all dates, companies, and factual information exactly the same.
-- Do NOT add, invent, or modify any personal data: names, emails, phone numbers, addresses, locations, or employers unless they already appear exactly in the original resume.
-- If a field (e.g. contact info) is missing in the original resume, DO NOT fabricate values — leave it unchanged or indicate it's omitted.
-- Use stronger action verbs and more professional language.
-- Better align with job description keywords.
-- Output ONLY the improved resume in markdown format. Do not add explanatory text before or after the resume.
+=== ABSOLUTE CONSTRAINTS (NEVER violate) ===
+NEVER:
+1. Add skills/technologies not in original resume
+2. Invent or modify dates, company names, contact info
+3. Fabricate metrics, achievements, or quantifiable results
+4. Add education, certs, or awards not originally present
+5. Create experience or responsibilities that don't exist
+6. Change job titles, companies, or timelines
 
-Original Resume:
+ALWAYS:
+1. Preserve ALL original facts (dates, titles, companies unchanged)
+2. Keep original accomplishments and responsibilities
+3. Maintain factual accuracy across all sections
+4. Expand brevity with existing information only
+
+=== ALLOWED OPTIMIZATION TECHNIQUES (4 ONLY) ===
+
+[1] ACTION VERB UPGRADE
+  BEFORE: "worked on payment systems"
+  AFTER: "architected scalable payment systems"
+  [only if verb reflects actual work]
+
+[2] KEYWORD SURFACING
+  BEFORE: "database experience"
+  AFTER: "managed PostgreSQL and Redis databases"
+  [only if tools mentioned in original; must be honest]
+
+[3] REORDERING & GROUPING
+  - Reorder bullets by relevance to job description
+  - Group similar accomplishments
+  - Lead with impact metrics
+  [NEVER add new bullets or info]
+
+[4] ACRONYM & ABBREVIATION EXPANSION
+  BEFORE: "Led API dev"
+  AFTER: "Led REST API development and integration"
+  [only if context in original justifies expansion]
+
+=== OUTPUT REQUIREMENTS ===
+- Format: Markdown with clear section headers
+- Length: Same or shorter (no padding)
+- Content: ONLY modified text from original
+- Completeness: Full resume with all sections
+- NO preamble, NO explanatory text, NO closing
+- NO new sections, education, or certifications
+- NO contact info modifications
+
+ORIGINAL RESUME:
 {resume_text}
 
-Job Description Keywords to Consider:
+TARGET KEYWORDS (use for alignment reference only):
 {', '.join(state.get('extracted_keywords', []))}
 
-Improved Resume:"""
+OUTPUT OPTIMIZED RESUME (markdown format only):"""
 
     if human_feedback and human_feedback.lower() != 'proceed':
         messages.append(AIMessage(content=f"Sub-task: Incorporating human feedback: '{human_feedback}'").model_dump())
@@ -440,16 +510,26 @@ def final_ats_analysis_node(state: ResumeOptimizationState) -> ResumeOptimizatio
     messages.append(HumanMessage(content="Node: `final_ats_analysis_node` - Performing final ATS analysis on the optimized resume.").model_dump())
 
     prompt = (
-        "You are a professional resume analyst. "
-        "Evaluate the following **optimized resume** against the job description and extracted keywords. "
-        "Your primary task is to provide an estimated ATS score for this optimized resume.\n"
-        "**ATS Score: [Your Estimated Score 0-100%]**\n"
-        "Briefly summarize the improvements made in this version relative to the job description requirements."
-        "Do NOT provide a full analysis report, only the score and a brief summary of improvements.\n\n"
+        "TASK: Score optimized resume's ATS match (0-100%). Show keyword evidence. List improvements made.\n\n"
+        "SCORING METHODOLOGY (Transparent Weights):\n"
+        "- Keyword Density (40%): Count found keywords, weight by frequency vs. industry baseline\n"
+        "- Keyword Placement (30%): Location scoring (title +3, summary +2, first bullets +1, later -0.5)\n"
+        "- Context Relevance (20%): Keywords match stated responsibilities/experience (binary per skill)\n"
+        "- ATS Format (10%): Clean sections, no graphics, readable structure, standard formatting\n\n"
+        "SCORE REFERENCE BANDS:\n"
+        "0-25%: Poor - Few keywords found, weak structure\n"
+        "26-50%: Below Average - Basic keyword coverage, average structure\n"
+        "51-75%: Good - Strong keyword alignment, clean structure\n"
+        "76-100%: Excellent - Comprehensive match, optimized format\n\n"
+        "OUTPUT FORMAT (EXACT STRUCTURE - NO DEVIATION):\n"
+        "**ATS Score: [XX]%**\n"
+        "**Keywords Found:** [20-word summary of top matches, with count, e.g., '8 of 15 target keywords found (Python, AWS, Docker, etc.)']\n"
+        "**Key Improvements:** [2-3 specific optimizations made, with before/after detail]\n"
+        "**Assessment:** [2-sentence summary of match quality and any gaps]\n\n"
+        f"Target Keywords (15-25): {', '.join(keywords)}\n\n"
         f"Job Description:\n{job_description}\n\n"
-        f"Extracted Keywords:\n{', '.join(keywords)}\n\n"
-        f"Optimized Resume Content:\n{edited_resume_text}\n\n"
-        "Analysis of Optimized Resume:"
+        f"Optimized Resume:\n{edited_resume_text}\n\n"
+        "START FINAL ASSESSMENT:"
     )
     messages.append(AIMessage(content=f"Sub-task: Sending prompt to LLM for final ATS score. Prompt snippet: '{prompt[:100]}...'").model_dump())
     logger.info("[LLM] Call started: final_ats_analysis")
@@ -546,14 +626,21 @@ def cover_letter_analysis_node(state: ResumeOptimizationState) -> ResumeOptimiza
     messages.append(HumanMessage(content="Node: `cover_letter_analysis_node` - Analyzing resume for letter content extraction.").model_dump())
 
     prompt = (
-        "Analyze this resume and job description to identify key elements for a cover letter:\n"
-        "1. Most relevant 2-3 professional experiences\n"
-        "2. Education highlights (if relevant)\n"
-        "3. Notable achievements/skills that match the JD\n"
-        "4. Professional tone indicators from the resume\n\n"
-        "Output ONLY a bullet-point list of these elements.\n\n"
+        "TASK: Extract key elements from resume+JD to inform cover letter. NO preamble.\n\n"
+        "OUTPUT FORMAT:\n"
+        "Bullet-point list ONLY. 6-10 bullets total. Categories:\n"
+        "• Relevant Experience: [2-3 bullets, list job titles/companies/key projects]\n"
+        "• Matching Skills: [2-3 bullets, only those in JD requirements]\n"
+        "• Key Achievements: [1-2 bullets, quantifiable results if available]\n"
+        "• Tone/Style: [1 bullet, describe communication style from resume]\n\n"
+        "SELECTION RULES:\n"
+        "1. ONLY include info explicitly in resume (no inferences)\n"
+        "2. ONLY skills that match job description keywords\n"
+        "3. Most recent/relevant experience first\n"
+        "4. Verify each bullet against resume source\n\n"
         f"Job Description:\n{job_description}\n\n"
-        f"Resume Content:\n{resume_text}"
+        f"Resume Content:\n{resume_text}\n\n"
+        "KEY ELEMENTS FOR COVER LETTER (bullets only):"
     )
     
     logger.info("[LLM] Call started: cover_letter_analysis")
@@ -585,22 +672,26 @@ def cover_letter_generation_node(state: ResumeOptimizationState) -> ResumeOptimi
     messages.append(HumanMessage(content="Node: `cover_letter_generation_node` - Generating professional cover letter.").model_dump())
 
     prompt = (
-        "Create a SINGLE-PARAGRAPH professional cover letter using these rules:\n"
-        "1. Length: 4-6 concise sentences that fit on one page\n"
-        "2. Structure:\n"
-        "   - Opening: Who you are and position you're applying for\n"
-        "   - Value Proposition: Why you're a strong fit (2-3 key points)\n"
-        "   - Closing: Desire to discuss further and gratitude\n"
-        "3. Content Rules:\n"
-        "   - Use ONLY information from the resume analysis\n"
-        "   - Mirror the resume's professional tone\n"
-        "   - Include implied contact details (no need to state them)\n"
-        "4. Format: Output in markdown with bold section headers\n\n"
-        "Resume Analysis:\n"
-        f"{resume_analysis}\n\n"
-        "Job Description:\n"
-        f"{job_description}\n\n"
-        "Generated Cover Letter (markdown format):\n"
+        "TASK: Write professional cover letter. Single paragraph. Use ONLY resume facts.\n\n"
+        "LETTER STRUCTURE (REQUIRED):\n"
+        "1. Opening (1 sentence): [Your name, position applied for, brief intro]\n"
+        "2. Value Proposition (2-3 sentences): [2-3 specific reasons you're a strong fit from resume]\n"
+        "3. Relevant Example (1 sentence): [One specific achievement that matches JD]\n"
+        "4. Closing (1 sentence): [Interest in discussing, gratitude]\n\n"
+        "CONTENT RULES - NEVER:\n"
+        "- Use information NOT in provided resume analysis\n"
+        "- Fabricate achievements, skills, or experience\n"
+        "- Make generic statements (no corporate jargon)\n"
+        "- Repeat resume verbatim (paraphrase, be conversational)\n"
+        "- Include phone/email (these are implied)\n\n"
+        "FORMAT REQUIREMENTS:\n"
+        "- Length: 4-6 sentences, ~200 words max\n"
+        "- Output: Plain markdown paragraph (no section headers)\n"
+        "- Tone: Professional, warm, authentic\n"
+        "- NO preamble, NO closing signature block\n\n"
+        f"Resume Key Points (use these only):\n{resume_analysis}\n\n"
+        f"Target Position Details:\n{job_description}\n\n"
+        "COVER LETTER (4-6 sentences, plain markdown):"
     )
     
     logger.info("[LLM] Call started: cover_letter_generation")

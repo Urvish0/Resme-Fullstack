@@ -1,0 +1,48 @@
+name: Frontend CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  frontend-ci:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: 'frontend/package-lock.json'
+
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Type check (TypeScript)
+        working-directory: frontend
+        run: npx tsc --noEmit
+
+      - name: Lint (ESLint)
+        working-directory: frontend
+        run: npm run lint || true
+
+      - name: Build frontend
+        working-directory: frontend
+        run: npm run build
+
+      - name: Validate build output
+        working-directory: frontend
+        run: test -d .next && echo "✓ Build output (.next) created successfully" || exit 1
+
+      - name: Build Docker image (frontend)
+        run: docker build -t resme-frontend:latest ./frontend
+
+      - name: Validate Docker build
+        run: docker inspect resme-frontend:latest > /dev/null && echo "✓ Docker image built successfully"

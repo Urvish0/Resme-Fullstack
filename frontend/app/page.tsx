@@ -429,48 +429,70 @@ export default function Home() {
               </div>
 
               {/* ATS Score */}
-              {activeTab === "resume" &&
-                jobStatus.result.old_ats_score !== undefined &&
-                jobStatus.result.new_ats_score !== undefined && (
-                  <p className="text-sm text-neutral-400">
-                    ATS Score{" "}
-                    <span className="line-through mx-2">
-                      {jobStatus.result.old_ats_score}%
-                    </span>
-                    <span className="font-semibold text-green-400">
-                      {jobStatus.result.new_ats_score}%
-                    </span>
-                  </p>
-                )}
+              {activeTab === "resume" && (
+                <>
+                  {(jobStatus.result.old_ats_score !== undefined &&
+                    jobStatus.result.old_ats_score !== null) ||
+                  (jobStatus.result.new_ats_score !== undefined &&
+                    jobStatus.result.new_ats_score !== null) ? (
+                    <p className="text-sm text-neutral-400">
+                      ATS Score{" "}
+                      {jobStatus.result.old_ats_score !== undefined &&
+                      jobStatus.result.old_ats_score !== null ? (
+                        <span className="line-through mx-2">
+                          {jobStatus.result.old_ats_score}%
+                        </span>
+                      ) : null}
+                      {jobStatus.result.new_ats_score !== undefined &&
+                      jobStatus.result.new_ats_score !== null ? (
+                        <span className="font-semibold text-green-400">
+                          {jobStatus.result.new_ats_score}%
+                        </span>
+                      ) : (
+                        <span className="text-neutral-500">Not available</span>
+                      )}
+                    </p>
+                  ) : null}
+                </>
+              )}
 
               {/* Content */}
-              {activeTab === "resume" && jobStatus.result.optimized_resume && (
-                <div className="rounded-xl border border-neutral-800 bg-neutral-950 p-5 space-y-4 prose prose-invert max-w-none">
-                  <ReactMarkdown>
-                    {jobStatus.result.optimized_resume}
-                  </ReactMarkdown>
-                  <div className="flex gap-4 text-sm">
-                    <button
-                      onClick={() =>
-                        copyToClipboard(jobStatus.result!.optimized_resume!)
-                      }
-                      className="text-blue-400 hover:underline"
-                    >
-                      Copy
-                    </button>
-                    <button
-                      onClick={() =>
-                        download(
-                          jobStatus.result!.optimized_resume!,
-                          "optimized_resume.md"
-                        )
-                      }
-                      className="text-blue-400 hover:underline"
-                    >
-                      Download
-                    </button>
-                  </div>
-                </div>
+              {activeTab === "resume" && (
+                <>
+                  {jobStatus.result.optimized_resume &&
+                  jobStatus.result.optimized_resume.trim() ? (
+                    <div className="rounded-xl border border-neutral-800 bg-neutral-950 p-5 space-y-4 prose prose-invert max-w-none">
+                      <ReactMarkdown>
+                        {jobStatus.result.optimized_resume}
+                      </ReactMarkdown>
+                      <div className="flex gap-4 text-sm">
+                        <button
+                          onClick={() =>
+                            copyToClipboard(jobStatus.result!.optimized_resume!)
+                          }
+                          className="text-blue-400 hover:underline"
+                        >
+                          Copy
+                        </button>
+                        <button
+                          onClick={() =>
+                            download(
+                              jobStatus.result!.optimized_resume!,
+                              "optimized_resume.md"
+                            )
+                          }
+                          className="text-blue-400 hover:underline"
+                        >
+                          Download
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="rounded-xl border border-neutral-800 bg-neutral-950 p-5 text-center text-neutral-400">
+                      <p>Resume content not available</p>
+                    </div>
+                  )}
+                </>
               )}
 
               {activeTab === "cover" && jobStatus.result.cover_letter && (

@@ -120,12 +120,27 @@ def run_resume_workflow(initial_state: dict) -> dict:
         )
 
     # 3️⃣ Extract REAL outputs (this is the key fix)
+    # Ensure all fields are properly extracted from final state
+    optimized_resume = final_state.get("edited_resume_content", "").strip()
+    cover_letter = final_state.get("cover_letter_text", "").strip()
+    old_ats_score = final_state.get("old_ats_score")
+    new_ats_score = final_state.get("new_ats_score")
+    extracted_keywords = final_state.get("extracted_keywords", [])
+    
+    # Log extracted values for debugging
+    logger.info(
+        f"[WORKFLOW] Extracted results - Resume length: {len(optimized_resume)}, "
+        f"Cover letter length: {len(cover_letter)}, "
+        f"Old ATS: {old_ats_score}, New ATS: {new_ats_score}, "
+        f"Keywords: {len(extracted_keywords)}"
+    )
+    
     result = {
-        "optimized_resume": final_state.get("edited_resume_content", ""),
-        "cover_letter": final_state.get("cover_letter_text", ""),
-        "old_ats_score": final_state.get("old_ats_score"),
-        "new_ats_score": final_state.get("new_ats_score"),
-        "extracted_keywords": final_state.get("extracted_keywords", []),
+        "optimized_resume": optimized_resume,
+        "cover_letter": cover_letter,
+        "old_ats_score": old_ats_score,
+        "new_ats_score": new_ats_score,
+        "extracted_keywords": extracted_keywords,
     }
 
     # 4️⃣ Cache

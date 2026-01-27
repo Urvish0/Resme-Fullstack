@@ -48,8 +48,16 @@ from pylatexenc.latex2text import LatexNodes2Text
 #     return response
 
 def clean_resume_response(response: str) -> str:
+    """
+    Clean LLM response to extract markdown resume content.
+    Handles various response formats and ensures consistent markdown output.
+    """
+    if not response or not response.strip():
+        return ""
+    
     response = response.strip()
 
+    # Remove common intro phrases
     intro_phrases = [
         "Here's the improved professional resume in markdown format:",
         "Here is the improved professional resume:",
@@ -57,6 +65,9 @@ def clean_resume_response(response: str) -> str:
         "The improved resume:",
         "Here's the improved resume:",
         "Improved Resume:",
+        "Here is your optimized resume:",
+        "Here's your optimized resume:",
+        "Optimized Resume:",
     ]
 
     for phrase in intro_phrases:
@@ -64,11 +75,24 @@ def clean_resume_response(response: str) -> str:
             response = response[len(phrase):].strip()
             break
 
-    # Only unwrap markdown fences if they wrap the FULL content
-    if response.startswith("```") and response.endswith("```"):
-        lines = response.splitlines()
-        if len(lines) > 2:
-            response = "\n".join(lines[1:-1]).strip()
+    # Handle markdown code block wrapping
+    # Case 1: Wrapped in triple backticks with optional language specifier
+    if response.startswith("```"):
+        lines = response.split("\n")
+        
+        # Remove first line (opening fence)
+        if len(lines) > 0:
+            lines = lines[1:]
+        
+        # Remove last line if it's closing fence
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        
+        response = "\n".join(lines).strip()
+    
+    # Safety check - if somehow we got an empty response, return empty
+    if not response or not response.strip():
+        return ""
 
     return response
 

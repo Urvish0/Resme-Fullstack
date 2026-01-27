@@ -139,17 +139,50 @@ def optimize_resume(payload: ResumeOptimizeRequest, request: Request):
                     message="Resume optimization workflow failed",
                     details={"***REASON***": str(e)}
                 )
-                
+        
+        # Validate and clean results - ensure we have valid data
         optimized_resume = clean_resume_response(
-        result.get("optimized_resume", "")
-)
+            result.get("optimized_resume", "")
+        )
+        
+        # Safety check - if resume is empty after cleaning, return original
+        if not optimized_resume or len(optimized_resume.strip()) < 50:
+            logger.warning("[API] Optimized resume empty or too short, using original")
+            optimized_resume = resume_text
+        
+        # Ensure ATS scores are present and valid
+        old_ats_score = result.get("old_ats_score")
+        new_ats_score = result.get("new_ats_score")
+        
+        # Validate ATS scores are integers between 0-100
+        if old_ats_score is not None and not isinstance(old_ats_score, int):
+            try:
+                old_ats_score = int(old_ats_score)
+            except (ValueError, TypeError):
+                logger.warning("[API] Invalid old_ats_score format")
+                old_ats_score = None
+        
+        if new_ats_score is not None and not isinstance(new_ats_score, int):
+            try:
+                new_ats_score = int(new_ats_score)
+            except (ValueError, TypeError):
+                logger.warning("[API] Invalid new_ats_score format")
+                new_ats_score = None
+        
+        # Ensure scores are within valid range
+        if old_ats_score is not None and (old_ats_score < 0 or old_ats_score > 100):
+            logger.warning(f"[API] old_ats_score out of range: {old_ats_score}")
+            old_ats_score = None
+        
+        if new_ats_score is not None and (new_ats_score < 0 or new_ats_score > 100):
+            logger.warning(f"[API] new_ats_score out of range: {new_ats_score}")
+            new_ats_score = None
 
         response = ResumeOptimizeResponse(
-            # optimized_resume=result.get("edited_resume_content", ""),
             optimized_resume=optimized_resume,
-            cover_letter=result.get("cover_letter_text"),
-            old_ats_score=result.get("old_ats_score"),
-            new_ats_score=result.get("new_ats_score"),
+            cover_letter=result.get("cover_letter_text", ""),
+            old_ats_score=old_ats_score,
+            new_ats_score=new_ats_score,
             extracted_keywords=result.get("extracted_keywords", [])
         )
 
