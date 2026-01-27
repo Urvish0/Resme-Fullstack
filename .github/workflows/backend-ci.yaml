@@ -43,7 +43,7 @@ jobs:
         run: pytest backend/tests -v --tb=short 2>/dev/null || echo "No tests found (optional)"
 
       - name: Build Docker image (backend)
-        run: docker build -t resme-backend:latest -f backend/Dockerfile .
+        run: docker build -t resme-backend:latest -f backend/Dockerfile backend/
 
       - name: Validate Docker build
         run: docker inspect resme-backend:latest > /dev/null && echo "✓ Docker image built successfully"

@@ -14,7 +14,7 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/* 
 
 # Copy requirements first for better caching
-COPY backend/requirements.txt .
+COPY requirements.txt .
 
 # Install Python dependencies 
 RUN pip install --no-cache-dir -r requirements.txt
@@ -24,7 +24,7 @@ RUN playwright install chromium
 RUN playwright install-deps chromium
 
 # Copy application code 
-COPY backend/app /app/app 
+COPY app /app/app 
 
 # Expose FastAPI port
 EXPOSE 8000
