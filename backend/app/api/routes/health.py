@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from ...core.redis import redis_client
+from ...core.redis import redis_client, REDIS_AVAILABLE
 
 router = APIRouter()
 
@@ -11,8 +11,11 @@ def health_check():
 
 @router.get("/ready")
 def readiness_check():
+    if not REDIS_AVAILABLE:
+        return {"status": "ready", "note": "running without Redis"}
+    
     try:
         redis_client.ping()
         return {"status": "ready"}
     except Exception:
-        return {"status": "not ready"}
+        return {"status": "degraded", "note": "Redis unavailable"}

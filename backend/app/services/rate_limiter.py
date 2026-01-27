@@ -1,7 +1,7 @@
 import time
 import logging
 from redis.exceptions import RedisError
-from ..core.redis import redis_client
+from ..core.redis import redis_client, REDIS_AVAILABLE
 
 logger = logging.getLogger(__name__)
 
@@ -15,6 +15,11 @@ def is_rate_limited(client_id: str) -> bool:
     Uses a Sliding Window algorithm via Redis Sorted Sets.
     Returns True if the client has exceeded the limit.
     """
+    # If Redis not available, fail open (allow all requests)
+    if not REDIS_AVAILABLE or not redis_client:
+        logger.info(f"[RATE_LIMIT] Redis unavailable, allowing all requests for {client_id}")
+        return False
+    
     logger.info(f"[RATE_LIMIT] Checking for client: {client_id}")
 
     key = f"rate_limit:{client_id}"
