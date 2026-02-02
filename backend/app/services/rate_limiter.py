@@ -17,9 +17,11 @@ def is_rate_limited(client_id: str) -> bool:
     """
     # If Redis not available, fail open (allow all requests)
     if not REDIS_AVAILABLE or not redis_client:
-        logger.info(f"[RATE_LIMIT] Redis unavailable, allowing all requests for {client_id}")
+        logger.info(
+            f"[RATE_LIMIT] Redis unavailable, allowing all requests for {client_id}"
+        )
         return False
-    
+
     logger.info(f"[RATE_LIMIT] Checking for client: {client_id}")
 
     key = f"rate_limit:{client_id}"

@@ -313,10 +313,12 @@ def optimize_resume_async(
 
             services_requested = payload.services or []
             result = {}
-            
+
             # Only run workflow if resume or cover letter requested
             if "resume" in services_requested or "cover" in services_requested:
-                logger.info(f"[ASYNC] Running workflow for services: {services_requested}")
+                logger.info(
+                    f"[ASYNC] Running workflow for services: {services_requested}"
+                )
                 with API_REQUEST_DURATION.labels(
                     "/optimize/async",
                     "POST",
@@ -337,7 +339,10 @@ def optimize_resume_async(
 
             # If cold email requested, generate it and attach to result
             try:
-                if "coldEmail" in services_requested or "cold_email" in services_requested:
+                if (
+                    "coldEmail" in services_requested
+                    or "cold_email" in services_requested
+                ):
                     logger.info("[ASYNC] Cold email requested — generating")
                     cold_email_text = generate_cold_email(
                         resume_text=initial_state.get("resume_raw_content", ""),
@@ -353,9 +358,15 @@ def optimize_resume_async(
                     if isinstance(result, dict):
                         result["cold_email"] = cold_email_text
                     else:
-                        result = {"optimized_resume": "", "cover_letter": "", "cold_email": cold_email_text}
+                        result = {
+                            "optimized_resume": "",
+                            "cover_letter": "",
+                            "cold_email": cold_email_text,
+                        }
             except Exception:
-                logger.exception("[ASYNC] Cold email generation failed; continuing without it")
+                logger.exception(
+                    "[ASYNC] Cold email generation failed; continuing without it"
+                )
 
             ### JOB COMPLETED ###
             API_REQUESTS_TOTAL.labels(

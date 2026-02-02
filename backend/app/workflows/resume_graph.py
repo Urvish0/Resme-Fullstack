@@ -10,7 +10,6 @@ from langgraph.checkpoint.memory import InMemorySaver
 from ..core.llm import get_llm
 from ..utils.text_cleaners import (
     extract_text_from_latex,
-    parse_markdown_to_plain_text,
     clean_resume_response,
 )
 from ..utils.web_scraper import get_url_content_from_tavily
@@ -171,8 +170,10 @@ def ingestion_node(state: ResumeOptimizationState) -> ResumeOptimizationState:
     elif fmt == "markdown":
         # Safe normalization
         if isinstance(resume_raw_content, dict):
-            resume_raw_content = resume_raw_content.get("md_content", "") or resume_raw_content.get("text", "")
-        
+            resume_raw_content = resume_raw_content.get(
+                "md_content", ""
+            ) or resume_raw_content.get("text", "")
+
         if not isinstance(resume_raw_content, str):
             resume_raw_content = str(resume_raw_content)
 
@@ -777,7 +778,9 @@ def final_response_node(state: ResumeOptimizationState) -> ResumeOptimizationSta
     cover_letter = state.get("cover_letter_text", "")
     cover_letter_markdown = state.get("cover_letter_markdown", "")
     cover_letter_path = (
-        cover_letter_markdown.split("Saved to: ")[-1] if cover_letter_markdown else "N/A"
+        cover_letter_markdown.split("Saved to: ")[-1]
+        if cover_letter_markdown
+        else "N/A"
     )
 
     messages.append(
@@ -997,15 +1000,15 @@ def determine_next_step(
         return END
 
     services = state.get("services_requested", [])
-    
+
     # Prioritize resume optimization if requested
     if "resume" in services:
         return "resume_editing"
-    
+
     # If no resume requested, but cover letter is
     if "cover" in services:
         return "cover_letter_analysis"
-    
+
     # Fallback/Default
     return "final_response"
 

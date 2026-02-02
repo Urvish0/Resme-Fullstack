@@ -13,7 +13,7 @@ def health_check():
 def readiness_check():
     if not REDIS_AVAILABLE:
         return {"status": "ready", "note": "running without Redis"}
-    
+
     try:
         redis_client.ping()
         return {"status": "ready"}

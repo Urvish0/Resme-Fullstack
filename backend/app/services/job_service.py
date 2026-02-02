@@ -27,7 +27,7 @@ def set_job_status(
 ):
     if not REDIS_AVAILABLE or not redis_client:
         return
-    
+
     try:
         payload = {
             "status": status,
@@ -54,7 +54,7 @@ def set_job_status(
 def get_job_status(job_id: str) -> dict | None:
     if not REDIS_AVAILABLE or not redis_client:
         return None
-    
+
     try:
         raw = redis_client.get(f"job:{job_id}")
         if not raw:
@@ -72,7 +72,7 @@ def get_all_running_jobs() -> dict:
     """
     if not REDIS_AVAILABLE or not redis_client:
         return {}
-    
+
     running_jobs = {}
 
     try:

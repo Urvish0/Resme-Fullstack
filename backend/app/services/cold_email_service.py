@@ -17,11 +17,11 @@ def _extract_name_from_resume(resume_text: str) -> Optional[str]:
         return None
 
     for line in resume_text.splitlines():
-        l = line.strip()
-        if not l:
+        clean_line = line.strip()
+        if not clean_line:
             continue
         # simple heuristic: words with initial caps and length>1
-        parts = l.split()
+        parts = clean_line.split()
         candidate = []
         for w in parts[:4]:
             if w[0].isupper() and w.isalpha():
@@ -61,7 +61,6 @@ def generate_cold_email(
     # Build the prompt using structured format matching other agents
     prompt_parts = [
         "TASK: Write a professional cold outreach email. Use ONLY facts from resume.\n",
-        
         "=== ABSOLUTE CONSTRAINTS (NEVER violate) ===",
         "NEVER:",
         "1. Fabricate skills, projects, or experience not in resume",
@@ -69,19 +68,16 @@ def generate_cold_email(
         "3. Add metrics or numbers not explicitly stated",
         "4. Include phone numbers or email addresses in body",
         "5. Use generic corporate jargon or buzzwords\n",
-        
         "ALWAYS:",
         "1. Reference specific skills/experience from resume only",
         "2. Keep tone professional but warm and conversational",
         "3. Be concise (3-5 sentences maximum)",
         "4. Make the value proposition clear in first 2 sentences\n",
-        
         "=== EMAIL STRUCTURE (REQUIRED) ===",
         "1. Opening (1 sentence): Introduce yourself, mention target role/company if provided",
         "2. Value Proposition (1-2 sentences): 2-3 specific skills from resume that match the opportunity",
         "3. Call to Action (1 sentence): Request for brief conversation or meeting",
         "4. Sign-off: Professional closing with sender name only (no contact details)\n",
-        
         "=== FORMAT REQUIREMENTS ===",
         "- Length: 3-5 sentences, ~100 words max",
         "- Output: Plain text, ready to send",
@@ -93,13 +89,13 @@ def generate_cold_email(
     # Add context
     prompt_parts.append("=== CONTEXT ===")
     prompt_parts.append(f"Sender Name: {sender_display}")
-    
+
     if recipient_name:
         prompt_parts.append(f"Recipient Name: {recipient_name}")
-    
+
     if company_name:
         prompt_parts.append(f"Target Company: {company_name}")
-    
+
     if target_role:
         prompt_parts.append(f"Target Role: {target_role}")
 
@@ -128,5 +124,6 @@ def generate_cold_email(
 
     except Exception as e:
         logger.exception("[COLD_EMAIL] LLM generation failed")
-        raise SystemFailure(message="Cold email generation failed", details={"reason": str(e)})
-
+        raise SystemFailure(
+            message="Cold email generation failed", details={"reason": str(e)}
+        )
