@@ -1,4 +1,10 @@
-version: '3.9'
+version: "3.9"
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
 
 services:
   redis:
@@ -6,6 +12,8 @@ services:
     container_name: resme-redis
     ports:
       - "6379:6379"
+    logging: *default-logging
+    restart: unless-stopped
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -13,31 +21,29 @@ services:
       retries: 5
 
   backend:
-    build:
-      context: ./backend 
-      dockerfile: Dockerfile 
-    container_name: resme-backend 
+    build: ./backend
+    container_name: resme-backend
     ports:
       - "8000:8000"
     env_file:
-      - .env 
+      - .env
     environment:
-      REDIS_HOST: redis 
+      REDIS_HOST: redis
       REDIS_PORT: 6379
     depends_on:
       redis:
         condition: service_healthy
+    logging: *default-logging
+    restart: unless-stopped
 
   frontend:
-    build: 
-      context: ./frontend 
-      dockerfile: dockerfile
-    container_name: resme-frontend 
+    build: ./frontend
+    container_name: resme-frontend
     ports:
       - "3000:3000"
     environment:
       NEXT_PUBLIC_API_BASE_URL: http://backend:8000
     depends_on:
       - backend
-    
-      
+    logging: *default-logging
+    restart: unless-stopped

@@ -1,26 +1,109 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #000000;
+  --foreground: #ffffff;
+  --muted: #111111;
+  --border: rgba(255, 255, 255, 0.1);
+  --accent: #ffffff;
+  
+  /* Fluid Typography */
+  --fs-xs: clamp(0.7rem, 0.6rem + 0.5vw, 0.8rem);
+  --fs-sm: clamp(0.8rem, 0.7rem + 0.5vw, 0.95rem);
+  --fs-base: clamp(0.95rem, 0.85rem + 0.5vw, 1.1rem);
+  --fs-lg: clamp(1.1rem, 1rem + 1vw, 1.35rem);
+  --fs-xl: clamp(1.35rem, 1.25rem + 1.5vw, 1.75rem);
+  --fs-2xl: clamp(1.75rem, 1.5rem + 2vw, 2.5rem);
+  --fs-3xl: clamp(2.5rem, 2rem + 3vw, 4rem);
+  --fs-hero: clamp(4rem, 3.5rem + 6vw, 10rem);
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  --color-muted: var(--muted);
+  --color-border: var(--border);
+  --color-accent: var(--accent);
+  
+  --font-sans: var(--font-outfit), var(--font-inter), ui-sans-serif, system-ui;
+  --font-serif: var(--font-serif), Georgia, serif;
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  letter-spacing: -0.01em;
+}
+
+/* Minimalist Utilities */
+.editorial-grid {
+  display: grid;
+  grid-template-columns: repeat(12, 1fr);
+  gap: 1.5rem;
+}
+
+.minimal-card {
+  border: 1px solid var(--border);
+  background: transparent;
+  transition: border-color 0.2s ease;
+}
+
+.minimal-card:hover {
+  border-color: rgba(255, 255, 255, 0.3);
+}
+
+.text-fluid-hero { font-size: var(--fs-hero); line-height: 0.9; font-weight: 800; letter-spacing: -0.04em; }
+.text-fluid-3xl { font-size: var(--fs-3xl); line-height: 1; font-weight: 700; letter-spacing: -0.03em; }
+.text-fluid-2xl { font-size: var(--fs-2xl); line-height: 1.1; font-weight: 600; }
+.text-fluid-base { font-size: var(--fs-base); line-height: 1.5; }
+
+.serif { font-family: var(--font-serif); }
+
+/* Custom Scroller */
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.1); }
+::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.2); }
+
+.prose-minimal {
+  color: #94a3b8;
+  font-size: var(--fs-base);
+  line-height: 1.6;
+}
+
+.prose-minimal h1, .prose-minimal h2, .prose-minimal h3 {
+  color: #ffffff;
+  font-weight: 700;
+  margin-top: 2em;
+  margin-bottom: 0.5em;
+}
+
+.prose-minimal p {
+  margin-bottom: 1.25em;
+}
+
+.prose-minimal ul {
+  list-style-type: none;
+  padding-left: 0;
+  margin-bottom: 1.5em;
+}
+
+.prose-minimal li {
+  position: relative;
+  padding-left: 1.5em;
+  margin-bottom: 0.75em;
+}
+
+.prose-minimal li::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0.6em;
+  width: 4px;
+  height: 4px;
+  background: #ffffff;
+  border-radius: 50%;
+  opacity: 0.3;
 }

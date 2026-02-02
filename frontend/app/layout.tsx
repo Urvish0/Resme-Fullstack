@@ -1,22 +1,27 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Inter, Outfit, Instrument_Serif } from "next/font/google";
 import "./globals.css";
-import { Toaster } from "react-hot-toast"
+import { Toaster } from "react-hot-toast";
 
-
-const geistSans = Geist({
-  variable: "--font-geist-sans",
+const inter = Inter({
+  variable: "--font-inter",
   subsets: ["latin"],
 });
 
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
+const outfit = Outfit({
+  variable: "--font-outfit",
+  subsets: ["latin"],
+});
+
+const instrumentSerif = Instrument_Serif({
+  variable: "--font-serif",
+  weight: "400",
   subsets: ["latin"],
 });
 
 export const metadata: Metadata = {
-  title: "Resme",
-  description: "Revive Your Resume",
+  title: "ResMe",
+  description: "Revive your career.",
 };
 
 export default function RootLayout({
@@ -25,20 +30,21 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
+    <html lang="en" className="dark">
       <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased`}
+        className={`${inter.variable} ${outfit.variable} ${instrumentSerif.variable} antialiased bg-black text-white`}
       >
-          <Toaster
-            position="top-right"
-            toastOptions={{
-              style: {
-                background: "#0a0a0a",
-                color: "#fff",
-                border: "1px solid #262626",
-              },
-            }}
-          />
+        <Toaster
+          position="top-right"
+          toastOptions={{
+            style: {
+              background: "rgba(15, 23, 42, 0.8)",
+              color: "#fff",
+              border: "1px solid rgba(255, 255, 255, 0.1)",
+              backdropFilter: "blur(8px)",
+            },
+          }}
+        />
         {children}
       </body>
     </html>

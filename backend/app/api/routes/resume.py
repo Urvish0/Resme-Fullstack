@@ -9,6 +9,7 @@ from fastapi import (
 )
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
+from typing import Optional, List
 import json
 import logging
 import uuid
@@ -62,6 +63,7 @@ from ...utils.file_parsers import (
 )
 from ...services.universal_scraper import get_job_description_from_url
 from ...utils.text_cleaners import clean_resume_response
+from ...services.cold_email_service import generate_cold_email
 
 
 logger = logging.getLogger(__name__)
@@ -208,9 +210,16 @@ def optimize_resume_stream(payload: ResumeOptimizeRequest, request: Request):
 
 
 class OptimizeAsyncRequest(BaseModel):
-    job_description: str = Field(min_length=50)
+    job_description: Optional[str] = None
     resume_text: str = Field(min_length=50)
     resume_format: str = "markdown"
+    services: List[str] = Field(default_factory=list)
+    cold_email_sender_name: Optional[str] = None
+    cold_email_sender_email: Optional[str] = None
+    cold_email_recipient_name: Optional[str] = None
+    cold_email_recipient_email: Optional[str] = None
+    cold_email_company_name: Optional[str] = None
+    cold_email_target_role: Optional[str] = None
 
 
 @router.post("/async")
@@ -302,11 +311,51 @@ def optimize_resume_async(
             set_job_status(job_id, JobStatus.RUNNING, idempotency_key=idempotency_key)
             set_idempotent_job(idempotency_key, job_id, JobStatus.RUNNING)
 
-            with API_REQUEST_DURATION.labels(
-                "/optimize/async",
-                "POST",
-            ).time():
-                result = run_resume_workflow(initial_state)
+            services_requested = payload.services or []
+            result = {}
+            
+            # Only run workflow if resume or cover letter requested
+            if "resume" in services_requested or "cover" in services_requested:
+                logger.info(f"[ASYNC] Running workflow for services: {services_requested}")
+                with API_REQUEST_DURATION.labels(
+                    "/optimize/async",
+                    "POST",
+                ).time():
+                    # Pass services to workflow so it can conditionally generate
+                    initial_state["services_requested"] = services_requested
+                    result = run_resume_workflow(initial_state)
+            else:
+                # If only cold email, don't run workflow, initialize empty result
+                logger.info("[ASYNC] Only cold email requested, skipping workflow")
+                result = {
+                    "optimized_resume": "",
+                    "cover_letter": "",
+                    "extracted_keywords": [],
+                    "old_ats_score": None,
+                    "new_ats_score": None,
+                }
+
+            # If cold email requested, generate it and attach to result
+            try:
+                if "coldEmail" in services_requested or "cold_email" in services_requested:
+                    logger.info("[ASYNC] Cold email requested — generating")
+                    cold_email_text = generate_cold_email(
+                        resume_text=initial_state.get("resume_raw_content", ""),
+                        job_description=initial_state.get("job_description_raw", ""),
+                        sender_name=payload.cold_email_sender_name,
+                        sender_email=payload.cold_email_sender_email,
+                        recipient_name=payload.cold_email_recipient_name,
+                        recipient_email=payload.cold_email_recipient_email,
+                        company_name=payload.cold_email_company_name,
+                        target_role=payload.cold_email_target_role,
+                    )
+                    # Attach to result dictionary
+                    if isinstance(result, dict):
+                        result["cold_email"] = cold_email_text
+                    else:
+                        result = {"optimized_resume": "", "cover_letter": "", "cold_email": cold_email_text}
+            except Exception:
+                logger.exception("[ASYNC] Cold email generation failed; continuing without it")
 
             ### JOB COMPLETED ###
             API_REQUESTS_TOTAL.labels(

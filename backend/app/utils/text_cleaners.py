@@ -154,8 +154,8 @@ def parse_markdown_to_plain_text(md_content: str) -> str:
     # 1. Remove HTML tags if present
     md_content = re.sub(r"<[^>]+>", " ", md_content)
 
-    # 2. Replace multiple whitespace characters with single space
-    md_content = re.sub(r"\s+", " ", md_content)
+    # 2. Replace horizontal whitespace characters with single space
+    md_content = re.sub(r"[ \t]+", " ", md_content)
 
     # 3. Remove markdown formatting if present
     # Headers
@@ -176,8 +176,8 @@ def parse_markdown_to_plain_text(md_content: str) -> str:
     # Code blocks
     md_content = re.sub(r"```.*?```", "", md_content, flags=re.DOTALL)
 
-    # 4. Clean up extra whitespace
-    md_content = " ".join(md_content.split())
+    # 4. Clean up extra whitespace at ends
+    md_content = md_content.strip()
 
     return md_content.strip()
 

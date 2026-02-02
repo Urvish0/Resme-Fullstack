@@ -94,4 +94,5 @@ def prepare_resume_state(
         "new_ats_score": None,
         "cover_letter_text": "",
         "cover_letter_markdown": "",
+        "services_requested": [],
     }

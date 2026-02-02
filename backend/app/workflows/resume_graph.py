@@ -43,6 +43,7 @@ class ResumeOptimizationState(TypedDict):
     cover_letter_text: str
     cover_letter_markdown: str
     cover_letter_analysis: str
+    services_requested: List[str]
 
 
 class _SimpleResp:
@@ -168,20 +169,16 @@ def ingestion_node(state: ResumeOptimizationState) -> ResumeOptimizationState:
         resume_plain_text = resume_raw_content
 
     elif fmt == "markdown":
-        messages.append(
-            AIMessage(
-                content="Sub-task: Parsing resume from Markdown to plain text."
-            ).model_dump()
-        )
-        # resume_plain_text = parse_markdown_to_plain_text.invoke({"md_content": resume_raw_content}) if hasattr(parse_markdown_to_plain_text, "invoke") else parse_markdown_to_plain_text(resume_raw_content)
-        # --- normalize resume_raw_content ---
+        # Safe normalization
         if isinstance(resume_raw_content, dict):
-            resume_raw_content = resume_raw_content.get("md_content", "")
-
+            resume_raw_content = resume_raw_content.get("md_content", "") or resume_raw_content.get("text", "")
+        
         if not isinstance(resume_raw_content, str):
             resume_raw_content = str(resume_raw_content)
 
-        resume_plain_text = parse_markdown_to_plain_text(resume_raw_content)
+        # For markdown, we keep it as is because it's already a high-signal structured format
+        # that LLMs understand better than flattened text.
+        resume_plain_text = resume_raw_content
 
     else:
         messages.append(
@@ -203,6 +200,12 @@ def ingestion_node(state: ResumeOptimizationState) -> ResumeOptimizationState:
         "messages": messages,
         "next_agent": "keyword_extraction",
         "current_task": "Extracting keywords",
+        "edited_resume_content": "",
+        "cover_letter_text": "",
+        "cover_letter_markdown": "",
+        "analysis_report": "",
+        "old_ats_score": None,
+        "new_ats_score": None,
         # **emit(
         #     event="ingestion_complete",
         #     payload={
@@ -300,9 +303,9 @@ def keyword_extraction_node(state: ResumeOptimizationState) -> ResumeOptimizatio
 
 def resume_analysis_node(state: ResumeOptimizationState) -> ResumeOptimizationState:
     messages = state["messages"]
-    job_description = state["job_description_text"]
-    resume_text = state["resume_plain_text"]
-    keywords = state["extracted_keywords"]
+    job_description = state.get("job_description_text", "")
+    resume_text = state.get("resume_plain_text", "")
+    keywords = state.get("extracted_keywords", [])
     old_ats_score = None
 
     messages.append(
@@ -494,14 +497,58 @@ ALWAYS:
   AFTER: "Led REST API development and integration"
   [only if context in original justifies expansion]
 
-=== OUTPUT REQUIREMENTS ===
-- Format: Markdown with clear section headers
-- Length: Same or shorter (no padding)
-- Content: ONLY modified text from original
-- Completeness: Full resume with all sections
-- NO preamble, NO explanatory text, NO closing
-- NO new sections, education, or certifications
-- NO contact info modifications
+=== OUTPUT FORMAT REQUIREMENTS (CRITICAL) ===
+You MUST output the resume in PROPER MARKDOWN format. This is non-negotiable.
+
+REQUIRED STRUCTURE:
+```
+# [Full Name]
+[Contact info on one line: city, email, phone, LinkedIn]
+
+## Professional Summary
+[2-3 sentence summary paragraph]
+
+## Technical Skills
+**Languages:** [list]
+**Frameworks:** [list]
+**Tools & Platforms:** [list]
+
+## Professional Experience
+
+### [Job Title] | [Company Name]
+*[Start Date] – [End Date]*
+
+- [Achievement bullet with action verb]
+- [Achievement bullet with action verb]
+- [Achievement bullet with action verb]
+
+### [Previous Job Title] | [Previous Company]
+*[Start Date] – [End Date]*
+
+- [Achievement bullet]
+- [Achievement bullet]
+
+## Education
+
+### [Degree] | [University/College]
+*[Year]*
+
+## Certifications
+- [Certification name], [Issuer], [Date]
+
+## Projects
+### [Project Name]
+- [Brief description with technologies used]
+```
+
+FORMAT RULES:
+- Use # for name, ## for sections, ### for job titles/degrees
+- Use **bold** for skill categories
+- Use - (bullet points) for achievements
+- Use *italics* for dates
+- Add blank lines between sections
+- NO code blocks around the output
+- Output ONLY the resume, no explanations
 
 ORIGINAL RESUME:
 {resume_text}
@@ -509,7 +556,7 @@ ORIGINAL RESUME:
 TARGET KEYWORDS (use for alignment reference only):
 {", ".join(state.get("extracted_keywords", []))}
 
-OUTPUT OPTIMIZED RESUME (markdown format only):"""
+OUTPUT THE OPTIMIZED RESUME IN MARKDOWN FORMAT NOW:"""
 
     if human_feedback and human_feedback.lower() != "proceed":
         messages.append(
@@ -633,9 +680,9 @@ OUTPUT OPTIMIZED RESUME (markdown format only):"""
 
 def final_ats_analysis_node(state: ResumeOptimizationState) -> ResumeOptimizationState:
     messages = state["messages"]
-    job_description = state["job_description_text"]
-    edited_resume_text = state["edited_resume_content"]
-    keywords = state["extracted_keywords"]
+    job_description = state.get("job_description_text", "")
+    edited_resume_text = state.get("edited_resume_content", "")
+    keywords = state.get("extracted_keywords", [])
     new_ats_score = None
 
     messages.append(
@@ -724,11 +771,14 @@ def final_response_node(state: ResumeOptimizationState) -> ResumeOptimizationSta
     messages = state["messages"]
     old_ats_score = state.get("old_ats_score")
     new_ats_score = state.get("new_ats_score")
-    analysis_report = state["analysis_report"]
-    edited_resume = state["edited_resume_content"]
+    analysis_report = state.get("analysis_report", "N/A")
+    edited_resume = state.get("edited_resume_content", "")
 
-    cover_letter = state["cover_letter_text"]
-    cover_letter_path = state.get("cover_letter_markdown", "").split("Saved to: ")[-1]
+    cover_letter = state.get("cover_letter_text", "")
+    cover_letter_markdown = state.get("cover_letter_markdown", "")
+    cover_letter_path = (
+        cover_letter_markdown.split("Saved to: ")[-1] if cover_letter_markdown else "N/A"
+    )
 
     messages.append(
         HumanMessage(
@@ -736,29 +786,58 @@ def final_response_node(state: ResumeOptimizationState) -> ResumeOptimizationSta
         ).model_dump()
     )
 
-    # Save the optimized resume to a file
-    saved_filepath = save_resume_to_markdown(edited_resume)
-    messages.append(
-        AIMessage(content=f"Optimized resume saved to: {saved_filepath}").model_dump()
+    # Save the optimized resume to a file if it exists
+    saved_filepath = "N/A"
+    if edited_resume:
+        saved_filepath = save_resume_to_markdown(edited_resume)
+        messages.append(
+            AIMessage(
+                content=f"Optimized resume saved to: {saved_filepath}"
+            ).model_dump()
+        )
+
+    # Construct report conditionally
+    report_lines = [
+        "--- Resume Optimization Report ---",
+        f"**Original ATS Score:** {old_ats_score if old_ats_score is not None else 'N/A'}%",
+        f"**Optimized ATS Score:** {new_ats_score if new_ats_score is not None else 'N/A'}%",
+        "",
+        "--- Detailed Analysis of Original Resume ---",
+        analysis_report,
+        "",
+    ]
+
+    if edited_resume:
+        report_lines.extend(
+            [
+                "--- Optimized Resume Content ---",
+                f"Saved to file: {saved_filepath}",
+                "",
+                f"```markdown\n{edited_resume}\n```",
+                "",
+            ]
+        )
+
+    if cover_letter:
+        report_lines.extend(
+            [
+                "--- Professional Cover Letter ---",
+                f"Saved to: {cover_letter_path}",
+                f"{cover_letter}",
+                "",
+            ]
+        )
+
+    report_lines.extend(
+        [
+            "--- Next Steps ---",
+            "1. Review both documents" if cover_letter else "1. Review the document",
+            "2. Customize further if needed",
+            "3. Submit with your application!",
+        ]
     )
 
-    final_report_content = (
-        f"--- Resume Optimization Report ---\n"
-        f"**Original ATS Score:** {old_ats_score if old_ats_score is not None else 'N/A'}%\n"
-        f"**Optimized ATS Score:** {new_ats_score if new_ats_score is not None else 'N/A'}%\n\n"
-        f"--- Detailed Analysis of Original Resume ---\n"
-        f"{analysis_report}\n\n"
-        f"--- Optimized Resume Content ---\n"
-        f"Saved to file: {saved_filepath}\n\n"
-        f"```markdown\n{edited_resume}\n```\n\n"
-        f"--- Professional Cover Letter ---\n"
-        f"Saved to: {cover_letter_path}\n"
-        f"{cover_letter}\n\n"
-        f"--- Next Steps ---\n"
-        "1. Review both documents\n"
-        "2. Customize further if needed\n"
-        "3. Submit with your application!"
-    )
+    final_report_content = "\n".join(report_lines)
 
     messages.append(AIMessage(content=final_report_content).model_dump())
     messages.append(
@@ -912,12 +991,37 @@ def cover_letter_generation_node(
 
 def determine_next_step(
     state: ResumeOptimizationState,
-) -> Literal["resume_editing", END]:
+) -> Literal["resume_editing", "cover_letter_analysis", "final_response", END]:
     feedback = state.get("human_feedback", "").lower().strip()
     if feedback == "exit" or feedback == "done":
         return END
-    else:  # If "proceed" or any other feedback (due to automation), it goes to editing
+
+    services = state.get("services_requested", [])
+    
+    # Prioritize resume optimization if requested
+    if "resume" in services:
         return "resume_editing"
+    
+    # If no resume requested, but cover letter is
+    if "cover" in services:
+        return "cover_letter_analysis"
+    
+    # Fallback/Default
+    return "final_response"
+
+
+def route_after_ats_analysis(
+    state: ResumeOptimizationState,
+) -> Literal["cover_letter_analysis", "final_response"]:
+    """
+    Route to cover letter generation only if cover letter was requested.
+    Otherwise skip to final response.
+    """
+    services = state.get("services_requested", [])
+    if "cover" in services:
+        return "cover_letter_analysis"
+    else:
+        return "final_response"
 
 
 ### File persistence helpers (used by nodes -> move) ###
@@ -993,13 +1097,22 @@ workflow.add_conditional_edges(
     "human_review",  # The node that returns the routing decision
     determine_next_step,  # The function that makes the routing decision
     {
-        "resume_editing": "resume_editing",  # Map the string "resume_editing" to the node "resume_editing"
-        END: END,  # Map the END symbol to the graph's END
+        "resume_editing": "resume_editing",
+        "cover_letter_analysis": "cover_letter_analysis",
+        "final_response": "final_response",
+        END: END,
     },
 )
 
 workflow.add_edge("resume_editing", "final_ats_analysis")
-workflow.add_edge("final_ats_analysis", "cover_letter_analysis")
+workflow.add_conditional_edges(
+    "final_ats_analysis",
+    route_after_ats_analysis,
+    {
+        "cover_letter_analysis": "cover_letter_analysis",
+        "final_response": "final_response",
+    },
+)
 workflow.add_edge("cover_letter_analysis", "cover_letter_generation")
 workflow.add_edge("cover_letter_generation", "final_response")
 workflow.add_edge("final_response", END)
