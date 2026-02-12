@@ -38,6 +38,7 @@ export type JobStatusResponse = {
       cold_email?: string
       old_ats_score?: number
       new_ats_score?: number
+      reflection_report?: string
     }
     error?: string
 }

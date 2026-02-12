@@ -56,46 +56,48 @@ def clean_resume_response(response: str) -> str:
     if not response or not response.strip():
         return ""
 
+    # Normalize line endings first
+    response = response.replace("\r\n", "\n").replace("\r", "\n")
     response = response.strip()
 
-    # Remove common intro phrases
-    intro_phrases = [
-        "Here's the improved professional resume in markdown format:",
-        "Here is the improved professional resume:",
-        "Improved Professional Resume:",
-        "The improved resume:",
-        "Here's the improved resume:",
-        "Improved Resume:",
-        "Here is your optimized resume:",
-        "Here's your optimized resume:",
-        "Optimized Resume:",
-    ]
+    # Highly aggressive intro stripping
+    # If we find a line starting with #, that's where the resume likely starts
+    match = re.search(r'^#\s+.+', response, flags=re.MULTILINE)
+    if match:
+        response = response[match.start():].strip()
+    else:
+        # Fallback to common intro phrases
+        intro_phrases = [
+            "Here's the improved", "Here is the improved", "Improved Professional Resume",
+            "The improved resume", "Here's the improved resume", "Improved Resume",
+            "Here is your optimized", "Here's your optimized", "Optimized Resume",
+            "Sure! Here is", "I have optimized"
+        ]
+        for phrase in intro_phrases:
+            if response.lower().startswith(phrase.lower()):
+                response = response[len(phrase):].strip()
+                if response.startswith(":") or response.startswith("."):
+                    response = response[1:].strip()
+                break
 
-    for phrase in intro_phrases:
-        if response.lower().startswith(phrase.lower()):
-            response = response[len(phrase) :].strip()
-            break
+    # Handle markdown code block wrapping even if not at the true start
+    if "```markdown" in response:
+        response = response.split("```markdown", 1)[1].split("```", 1)[0].strip()
+    elif "```" in response:
+        # Check if the text inside the first code block is large (likely the resume)
+        potential_block = response.split("```", 1)[1].split("```", 1)[0].strip()
+        if len(potential_block) > len(response) * 0.5:
+            response = potential_block
 
-    # Handle markdown code block wrapping
-    # Case 1: Wrapped in triple backticks with optional language specifier
-    if response.startswith("```"):
-        lines = response.split("\n")
+    # --- Whitespace normalization ---
+    # Strip trailing whitespace from each line
+    lines = [line.rstrip() for line in response.split("\n")]
+    response = "\n".join(lines)
 
-        # Remove first line (opening fence)
-        if len(lines) > 0:
-            lines = lines[1:]
+    # Collapse 3+ consecutive blank lines into exactly 2 (one blank line between sections)
+    response = re.sub(r"\n{3,}", "\n\n", response)
 
-        # Remove last line if it's closing fence
-        if lines and lines[-1].strip() == "```":
-            lines = lines[:-1]
-
-        response = "\n".join(lines).strip()
-
-    # Safety check - if somehow we got an empty response, return empty
-    if not response or not response.strip():
-        return ""
-
-    return response
+    return response.strip()
 
 
 def remove_added_content(edited: str, original: str) -> str:

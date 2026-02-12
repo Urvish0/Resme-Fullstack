@@ -14,4 +14,5 @@ def get_llm(
         model=model,
         temperature=temperature,
         api_key=settings.groq_api_key,
+        max_retries=6,  # Higher retries for free tier stability
     )

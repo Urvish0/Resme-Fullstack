@@ -6,7 +6,7 @@
   --muted: #111111;
   --border: rgba(255, 255, 255, 0.1);
   --accent: #ffffff;
-  
+
   /* Fluid Typography */
   --fs-xs: clamp(0.7rem, 0.6rem + 0.5vw, 0.8rem);
   --fs-sm: clamp(0.8rem, 0.7rem + 0.5vw, 0.95rem);
@@ -24,7 +24,7 @@
   --color-muted: var(--muted);
   --color-border: var(--border);
   --color-accent: var(--accent);
-  
+
   --font-sans: var(--font-outfit), var(--font-inter), ui-sans-serif, system-ui;
   --font-serif: var(--font-serif), Georgia, serif;
 }
@@ -54,36 +54,109 @@ body {
   border-color: rgba(255, 255, 255, 0.3);
 }
 
-.text-fluid-hero { font-size: var(--fs-hero); line-height: 0.9; font-weight: 800; letter-spacing: -0.04em; }
-.text-fluid-3xl { font-size: var(--fs-3xl); line-height: 1; font-weight: 700; letter-spacing: -0.03em; }
-.text-fluid-2xl { font-size: var(--fs-2xl); line-height: 1.1; font-weight: 600; }
-.text-fluid-base { font-size: var(--fs-base); line-height: 1.5; }
-
-.serif { font-family: var(--font-serif); }
-
-/* Custom Scroller */
-::-webkit-scrollbar { width: 4px; }
-::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.1); }
-::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.2); }
-
-.prose-minimal {
-  color: #94a3b8;
+.text-fluid-hero {
+  font-size: var(--fs-hero);
+  line-height: 0.9;
+  font-weight: 800;
+  letter-spacing: -0.04em;
+}
+.text-fluid-3xl {
+  font-size: var(--fs-3xl);
+  line-height: 1;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+}
+.text-fluid-2xl {
+  font-size: var(--fs-2xl);
+  line-height: 1.1;
+  font-weight: 600;
+}
+.text-fluid-base {
   font-size: var(--fs-base);
-  line-height: 1.6;
+  line-height: 1.5;
 }
 
-.prose-minimal h1, .prose-minimal h2, .prose-minimal h3 {
+.serif {
+  font-family: var(--font-serif);
+}
+
+/* Custom Scroller */
+::-webkit-scrollbar {
+  width: 4px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.prose-minimal {
+  color: #e2e8f0;
+  font-size: var(--fs-base);
+  line-height: 1.7;
+  /* Removed white-space: pre-wrap - this was breaking markdown rendering */
+}
+
+/* Heading hierarchy with distinct sizes */
+.prose-minimal h1 {
   color: #ffffff;
+  font-size: 2rem;
+  font-weight: 800;
+  margin-top: 2em;
+  margin-bottom: 0.75em;
+  letter-spacing: -0.02em;
+}
+
+/* Special case: first h1 (name) should have no top margin */
+.prose-minimal h1:first-child {
+  margin-top: 0;
+}
+
+.prose-minimal h2 {
+  color: #ffffff;
+  font-size: 1.5rem;
   font-weight: 700;
   margin-top: 2em;
+  margin-bottom: 0.5em;
+  letter-spacing: -0.01em;
+}
+
+.prose-minimal h3 {
+  color: #f1f5f9;
+  font-size: 1.25rem;
+  font-weight: 600;
+  margin-top: 1.5em;
   margin-bottom: 0.5em;
 }
 
 .prose-minimal p {
-  margin-bottom: 1.25em;
+  margin-bottom: 1em;
+  color: #cbd5e1;
 }
 
+/* Inline formatting */
+.prose-minimal strong {
+  color: #ffffff;
+  font-weight: 700;
+}
+
+.prose-minimal em {
+  color: rgba(255, 255, 255, 0.8);
+  font-style: italic;
+}
+
+/* Horizontal rules */
+.prose-minimal hr {
+  border: none;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  margin: 2em 0;
+}
+
+/* Lists */
 .prose-minimal ul {
   list-style-type: none;
   padding-left: 0;
@@ -93,17 +166,27 @@ body {
 .prose-minimal li {
   position: relative;
   padding-left: 1.5em;
-  margin-bottom: 0.75em;
+  margin-bottom: 0.5em;
+  color: #cbd5e1;
 }
 
 .prose-minimal li::before {
   content: "";
   position: absolute;
   left: 0;
-  top: 0.6em;
+  top: 0.65em;
   width: 4px;
   height: 4px;
   background: #ffffff;
   border-radius: 50%;
-  opacity: 0.3;
+  opacity: 0.4;
+}
+
+/* Resume container for better presentation */
+.resume-container {
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 12px;
+  padding: 3rem;
+  backdrop-filter: blur(10px);
 }

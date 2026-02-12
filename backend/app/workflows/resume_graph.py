@@ -1,5 +1,6 @@
 import re
 import logging
+import time
 from typing import TypedDict, Annotated, List, Literal, Optional
 
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
@@ -8,6 +9,7 @@ from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import InMemorySaver
 
 from ..core.llm import get_llm
+from ..core.supabase import SupabaseService
 from ..utils.text_cleaners import (
     extract_text_from_latex,
     clean_resume_response,
@@ -43,6 +45,10 @@ class ResumeOptimizationState(TypedDict):
     cover_letter_markdown: str
     cover_letter_analysis: str
     services_requested: List[str]
+    memory_context: Optional[dict]
+    reflection_report: str
+    user_id: Optional[str]
+    self_correction_count: int
 
 
 class _SimpleResp:
@@ -90,13 +96,28 @@ def ingestion_node(state: ResumeOptimizationState) -> ResumeOptimizationState:
     job_description_raw = state["job_description_raw"]
     resume_raw_content = state["resume_raw_content"]
     resume_format = state["resume_format"]
+    user_id = state.get("user_id", "default_user")
 
-    messages.append(HumanMessage(content="Starting ingestion process.").model_dump())
+    messages.append(HumanMessage(content=f"Starting ingestion process for user: {user_id}.").model_dump())
     messages.append(
         AIMessage(
             content="Node: `ingestion_node` - Processing raw inputs."
         ).model_dump()
     )
+
+    # Fetch latest resume from Supabase for comparison/context
+    latest_version = SupabaseService.get_latest_resume(user_id)
+    if latest_version:
+        messages.append(
+            AIMessage(
+                content=f"Sub-task: Found previous resume version (ATS Score: {latest_version.get('ats_score')}%). Using as historical context."
+            ).model_dump()
+        )
+        # We can store this in state if we want nodes to explicitly see it
+        memory_context = state.get("memory_context", {})
+        memory_context["latest_resume_content"] = latest_version.get("content")
+        memory_context["latest_ats_score"] = latest_version.get("ats_score")
+        state["memory_context"] = memory_context
 
     job_description_text = ""
     if job_description_raw.startswith("http"):
@@ -205,15 +226,10 @@ def ingestion_node(state: ResumeOptimizationState) -> ResumeOptimizationState:
         "cover_letter_text": "",
         "cover_letter_markdown": "",
         "analysis_report": "",
+        "reflection_report": "",
         "old_ats_score": None,
         "new_ats_score": None,
-        # **emit(
-        #     event="ingestion_complete",
-        #     payload={
-        #         "job_description_snippet": len(job_description_text),
-        #         "resume_snippet": len(resume_plain_text),
-        #     }
-        # )
+        "self_correction_count": 0,
         **emit(
             event="token_diagnostics",
             payload={
@@ -348,6 +364,8 @@ def resume_analysis_node(state: ResumeOptimizationState) -> ResumeOptimizationSt
         ).model_dump()
     )
     logger.info("[LLM] Call started: resume_analysis")
+    # Smart Stagger for Rate Limits
+    time.sleep(1.0)
     try:
         with Timer("llm_invoke for resume_analysis"):
             response = _safe_invoke(llm, prompt)
@@ -361,7 +379,9 @@ def resume_analysis_node(state: ResumeOptimizationState) -> ResumeOptimizationSt
     logger.info("[LLM] Call completed: resume_analysis")
     analysis_report = response.content
 
-    score_match = re.search(r"ATS Score:\s*(\d+)%", analysis_report)
+    # Robust regex to catch "ATS Score: **85%**", "ATS Score: 85", etc.
+    score_match = re.search(r"ATS\s*Score\D+(\d+)", analysis_report, re.IGNORECASE)
+
     if score_match:
         old_ats_score = int(score_match.group(1))
         messages.append(
@@ -451,6 +471,9 @@ def resume_editing_node(state: ResumeOptimizationState) -> ResumeOptimizationSta
     messages = state["messages"]
     resume_text = state["resume_plain_text"]
     human_feedback = state["human_feedback"]
+    memory_context = state.get("memory_context", {})
+    latest_resume = memory_context.get("latest_resume_content")
+    latest_score = memory_context.get("latest_ats_score")
 
     messages.append(
         HumanMessage(
@@ -458,73 +481,87 @@ def resume_editing_node(state: ResumeOptimizationState) -> ResumeOptimizationSta
         ).model_dump()
     )
 
-    editing_instructions = f"""TASK: Optimize resume for ATS matching. ONLY legitimate improvements. NO fabrication.
+    history_context = ""
+    if latest_resume and latest_score:
+        history_context = f"""
+=== HISTORICAL CONTEXT (PREVIOUS BEST VERSION) ===
+Previous ATS Score: {latest_score}%
+Previous Content:
+{latest_resume[:1000]}... [truncated]
+
+GOAL: Your goal is to EXCEED the previous score by refining the content further without over-optimizing. Identify what worked in the last version and build upon it.
+"""
+
+    job_description = state.get("job_description_text", "")
+    editing_instructions = f"""TASK: Act as an expert Senior Technical Recruiter. Optimize the provided resume for ATS matching against the specific Job Description below.
+
+{history_context}
+
+=== JOB DESCRIPTION ===
+{job_description}
 
 === ABSOLUTE CONSTRAINTS (NEVER violate) ===
 NEVER:
-1. Add skills/technologies not in original resume
-2. Invent or modify dates, company names, contact info
-3. Fabricate metrics, achievements, or quantifiable results
-4. Add education, certs, or awards not originally present
-5. Create experience or responsibilities that don't exist
-6. Change job titles, companies, or timelines
+1. Add ANY skills, tools, or technologies to a specific job/project that were NOT originally in that specific section of the resume. 
+2. Bleed information between sections: Do not move tech stack from "Projects" to "Experience" or vice versa unless it was originally present in both.
+3. Invent or modify dates, company names, contact info, or locations.
+4. Fabricate metrics, numbers, or specific accomplishments.
+5. Create new projects or experience items.
+
+VALIDATION RULE: If a keyword is in the Job Description but NOT in the original resume section, DO NOT add it to that section. 
 
 ALWAYS:
-1. Preserve ALL original facts (dates, titles, companies unchanged)
-2. Keep original accomplishments and responsibilities
-3. Maintain factual accuracy across all sections
-4. Expand brevity with existing information only
+1. Preserve ALL original facts (dates, titles, companies unchanged).
+2. ONLY REPHRASE: You may improve the prose and verb-strength of EXISTING descriptions.
+3. Maintain 100% factual fidelity to the source section.
+4. REJECT any suggestion to "borrow" skills from one job to benefit another.
 
 === ALLOWED OPTIMIZATION TECHNIQUES (4 ONLY) ===
 
-[1] ACTION VERB UPGRADE
-  BEFORE: "worked on payment systems"
-  AFTER: "architected scalable payment systems"
-  [only if verb reflects actual work]
+[1] PERSUASIVE REPHRASING (SOURCE-ONLY)
+  - Transform passive duties into achievement-oriented results using EXISTING facts.
+  - Use high-impact verbs: "Engineered", "Optimized", "Spearheaded", "Architected", "Automated".
+  - DO NOT add new outcomes. Only rephrase what is already there.
 
-[2] KEYWORD SURFACING
-  BEFORE: "database experience"
-  AFTER: "managed PostgreSQL and Redis databases"
-  [only if tools mentioned in original; must be honest]
+[2] STRATEGIC KEYWORD ALIGNMENT
+  - Integrate target keywords from the JD into the Professional Summary ONLY IF you actually possess those skills (as per the whole resume).
+  - In experience bullets, only use keywords that were originally present in that specific job.
 
-[3] REORDERING & GROUPING
-  - Reorder bullets by relevance to job description
-  - Group similar accomplishments
-  - Lead with impact metrics
-  [NEVER add new bullets or info]
+[3] GENERALIZED SUMMARY
+  - Rewrite the Professional Summary to be a bridge between the JD and your actual resume.
+  - It should be professional, slightly generalized to cover your career trajectory, but grounded in resume facts.
 
-[4] ACRONYM & ABBREVIATION EXPANSION
-  BEFORE: "Led API dev"
-  AFTER: "Led REST API development and integration"
-  [only if context in original justifies expansion]
+[4] CONCISION & CLARITY
+  - Remove fluff and professional filler.
+  - Ensure the formatting is crisp and professional.
 
 === OUTPUT FORMAT REQUIREMENTS (CRITICAL) ===
 You MUST output the resume in PROPER MARKDOWN format. This is non-negotiable.
 
-REQUIRED STRUCTURE:
 ```
 # [Full Name]
 [Contact info on one line: city, email, phone, LinkedIn]
 
+---
+
 ## Professional Summary
-[2-3 sentence summary paragraph]
+[2-3 sentence summary paragraph.]
 
 ## Technical Skills
-**Languages:** [list]
-**Frameworks:** [list]
-**Tools & Platforms:** [list]
+- **Languages:** [list]
+- **Frameworks:** [list]
+- **Tools & Platforms:** [list]
 
 ## Professional Experience
 
 ### [Job Title] | [Company Name]
-*[Start Date] – [End Date]*
+*[Start Date] - [End Date]*
 
-- [Achievement bullet with action verb]
 - [Achievement bullet with action verb]
 - [Achievement bullet with action verb]
 
 ### [Previous Job Title] | [Previous Company]
-*[Start Date] – [End Date]*
+*[Start Date] - [End Date]*
 
 - [Achievement bullet]
 - [Achievement bullet]
@@ -557,7 +594,15 @@ ORIGINAL RESUME:
 TARGET KEYWORDS (use for alignment reference only):
 {", ".join(state.get("extracted_keywords", []))}
 
-OUTPUT THE OPTIMIZED RESUME IN MARKDOWN FORMAT NOW:"""
+OUTPUT THE OPTIMIZED RESUME IN MARKDOWN FORMAT NOW. 
+
+CRITICAL: 
+1. Use DOUBLE NEWLINES between every header and every paragraph. 
+2. Use EXACTLY the headers provided (# for name, ## for sections).
+3. DO NOT output a single paragraph. 
+4. DO NOT use '•' bullets, use '-' instead.
+5. NO code blocks, NO intros, NO outros. ONLY THE RESUME.
+"""
 
     if human_feedback and human_feedback.lower() != "proceed":
         messages.append(
@@ -574,11 +619,44 @@ OUTPUT THE OPTIMIZED RESUME IN MARKDOWN FORMAT NOW:"""
     )
 
     logger.info("[LLM] Call started: resume_editing")
+    # Smart Stagger for Rate Limits
+    time.sleep(1.5)
     try:
         with Timer("llm_invoke for resume_editing"):
             response = _safe_invoke(llm, editing_instructions)
         logger.info("[LLM] Call completed: resume_editing")
         raw_response = response.content.strip()
+
+        # Visual/Structure Repair: If the AI failed to include Markdown symbols (common with 8b models),
+        # we perform a "soft-repair" to ensure the frontend renders properly.
+        if "#" not in raw_response[:200]:
+            print("DEBUG - Detecting missing Markdown headers. Repairing...")
+            # Try to identify common resume sections and inject headers using regex
+            # Regex aims to match standalone lines or lines starting with these keywords
+            sections = {
+                "Professional Summary": r"(?i)^(?:##\s*)?Professional Summary",
+                "Technical Skills": r"(?i)^(?:##\s*)?Technical Skills?",
+                "Professional Experience": r"(?i)^(?:##\s*)?Professional Experience",
+                "Experience": r"(?i)^(?:##\s*)?Experience",
+                "Education": r"(?i)^(?:##\s*)?Education",
+                "Certifications": r"(?i)^(?:##\s*)?Certifications?",
+                "Projects": r"(?i)^(?:##\s*)?Projects"
+            }
+            
+            # Inject Name header if it looks like a name start (short first line, no header)
+            lines = raw_response.split("\n")
+            if lines and not lines[0].strip().startswith("#") and len(lines[0]) < 60:
+                 # Heuristic: likely a name
+                 lines[0] = f"# {lines[0]}"
+                 raw_response = "\n".join(lines)
+
+            # Apply replacements
+            for key, pattern in sections.items():
+                if re.search(pattern, raw_response, re.MULTILINE):
+                    # Replace found section title with strict Markdown header
+                    # We use a lambda to ensure we don't double-add ## if it exists (though regex handles optional)
+                    # simpler approach: Replace the match with the clean header
+                    raw_response = re.sub(pattern, f"## {key}", raw_response, flags=re.MULTILINE | re.IGNORECASE)
 
         # Debug output
         print(f"\nDEBUG - Raw LLM Response Length: {len(raw_response)}")
@@ -720,6 +798,8 @@ def final_ats_analysis_node(state: ResumeOptimizationState) -> ResumeOptimizatio
         ).model_dump()
     )
     logger.info("[LLM] Call started: final_ats_analysis")
+    # Smart Stagger for Rate Limits
+    time.sleep(1.0)
     try:
         with Timer("llm_invoke for final_ats_analysis"):
             response = _safe_invoke(llm, prompt)
@@ -734,7 +814,9 @@ def final_ats_analysis_node(state: ResumeOptimizationState) -> ResumeOptimizatio
     logger.info("[LLM] Call completed: final_ats_analysis")
     new_analysis_summary = response.content
 
-    score_match = re.search(r"ATS Score:\s*(\d+)%", new_analysis_summary)
+    # Robust regex for ATS score
+    score_match = re.search(r"ATS\s*Score\D+(\d+)", new_analysis_summary, re.IGNORECASE)
+
     if score_match:
         new_ats_score = int(score_match.group(1))
         messages.append(
@@ -763,9 +845,106 @@ def final_ats_analysis_node(state: ResumeOptimizationState) -> ResumeOptimizatio
         **state,
         "new_ats_score": new_ats_score,
         "messages": messages,
-        "next_agent": "final_response",
+        "next_agent": "reflection",
+        "current_task": "Self-reflecting on results",
+    }
+
+
+def reflection_node(state: ResumeOptimizationState) -> ResumeOptimizationState:
+    messages = state["messages"]
+    edited_resume = state.get("edited_resume_content", "")
+
+    messages.append(
+        HumanMessage(
+            content="Node: `reflection_node` - Critiquing the optimized resume against Job Description."
+        ).model_dump()
+    )
+
+    prompt = (
+        "TASK: Act as a strict Factual Auditor. Compare the ORIGINAL resume against the OPTIMIZED version.\n\n"
+        "GOAL:\n"
+        "Identify if the AI Editor 'hallucinated' or added any skills, tools, or experiences that did not exist in the source material.\n\n"
+        "CRITIQUE CRITERIA:\n"
+        "1. Hallucination Check: Did the editor add any specific tools (e.g., 'Snowflake', 'AWS') that were NOT in the original? (INSTANT FAIL if so)\n"
+        "2. Section Bleeding: Did the editor move skills/tech from projects into job experience where they don't belong?\n"
+        "3. Factual Drift: Did bullet points change their meaning to sound more impressive than the source facts? \n"
+        "OUTPUT FORMAT (Strictly JSON):\n"
+        "{\n"
+        "  \"good\": \"Points about factual rephrasing\",\n"
+        "  \"gap\": \"Hallucinated skills or metrics found (be specific)\",\n"
+        "  \"integrity_status\": \"PASS/FAIL\",\n"
+        "  \"should_retry\": true/false,\n"
+        "  \"retry_reason\": \"Specific instruction to REMOVE hallucinated content\"\n"
+        "}\n\n"
+        f"ORIGINAL RESUME:\n{state.get('resume_plain_text', '')[:2000]}\n\n"
+        f"OPTIMIZED RESUME:\n{edited_resume[:2000]}\n\n"
+        "AUDIT JSON:"
+    )
+
+    logger.info("[LLM] Call started: reflection")
+    # Smart Stagger for Rate Limits
+    time.sleep(1.5)
+    try:
+        response = _safe_invoke(llm, prompt)
+        import json as py_json
+        res_text = response.content.strip()
+        # Clean potential markdown blocks
+        if res_text.startswith("```"):
+            if "json" in res_text[:10]:
+                res_text = res_text.split("```json", 1)[1].split("```", 1)[0].strip()
+            else:
+                res_text = res_text.split("```", 2)[1].strip()
+        
+        reflection_data = py_json.loads(res_text)
+        reflection_report = f"- **The Good**: {reflection_data.get('good')}\n- **The Gap**: {reflection_data.get('gap')}\n- **Integrity**: {reflection_data.get('integrity_status')}"
+        should_retry = reflection_data.get("should_retry", False)
+        retry_instruction = reflection_data.get("retry_reason", "")
+    except Exception as e:
+        logger.error(f"Reflection failed: {e}")
+        reflection_report = "Reflection node failed to generate report."
+        should_retry = False
+        retry_instruction = ""
+
+    # Prevent infinite loops (max 1 retry)
+    current_retries = state.get("self_correction_count", 0)
+    if current_retries >= 1:
+        should_retry = False
+
+    messages.append(AIMessage(content=f"Reflection Insight:\n{reflection_report}").model_dump())
+
+    new_state = {
+        **state,
+        "reflection_report": reflection_report,
+        "messages": messages,
         "current_task": "Finalizing output",
     }
+    
+    if should_retry:
+        new_state["human_feedback"] = f"AUTO-RETRY INSTRUCTION: {retry_instruction}"
+        new_state["self_correction_count"] = current_retries + 1
+        new_state["next_agent"] = "resume_editing"
+        logger.info(f"[REFLECTION] Triggering self-correction retry #{new_state['self_correction_count']}")
+    else:
+        new_state["next_agent"] = "final_response"
+        
+    return new_state
+
+
+def route_after_reflection(
+    state: ResumeOptimizationState,
+) -> Literal["resume_editing", "cover_letter_analysis", "final_response"]:
+    """
+    Route based on reflection outcome and service requests.
+    """
+    next_agent = state.get("next_agent")
+    if next_agent == "resume_editing":
+        return "resume_editing"
+    
+    services = state.get("services_requested", [])
+    if "cover" in services:
+        return "cover_letter_analysis"
+    else:
+        return "final_response"
 
 
 def final_response_node(state: ResumeOptimizationState) -> ResumeOptimizationState:
@@ -1084,6 +1263,7 @@ workflow.add_node(
 )  # This is now a router node
 workflow.add_node("resume_editing", resume_editing_node)
 workflow.add_node("final_ats_analysis", final_ats_analysis_node)
+workflow.add_node("reflection", reflection_node)
 workflow.add_node("cover_letter_analysis", cover_letter_analysis_node)
 workflow.add_node("cover_letter_generation", cover_letter_generation_node)
 workflow.add_node("final_response", final_response_node)
@@ -1108,10 +1288,13 @@ workflow.add_conditional_edges(
 )
 
 workflow.add_edge("resume_editing", "final_ats_analysis")
+workflow.add_edge("final_ats_analysis", "reflection")
+
 workflow.add_conditional_edges(
-    "final_ats_analysis",
-    route_after_ats_analysis,
+    "reflection",
+    route_after_reflection,
     {
+        "resume_editing": "resume_editing",
         "cover_letter_analysis": "cover_letter_analysis",
         "final_response": "final_response",
     },

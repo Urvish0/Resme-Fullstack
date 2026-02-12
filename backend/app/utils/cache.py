@@ -49,3 +49,36 @@ def set_cached_result(key: str, value: dict):
             f"[CACHE] Redis SET failed for key {key}",
             extra={"error_type": "retryable_error"},
         )
+
+
+def get_session_memory(session_id: str):
+    """
+    Retrieves session-specific agent memory (keywords, history).
+    """
+    if not REDIS_AVAILABLE or not redis_client:
+        return {}
+    
+    key = f"session_memory:{session_id}"
+    try:
+        data = redis_client.get(key)
+        if data:
+            return json.loads(data)
+        return {}
+    except Exception:
+        return {}
+
+
+def update_session_memory(session_id: str, updates: dict):
+    """
+    Updates session-specific agent memory with new data.
+    """
+    if not REDIS_AVAILABLE or not redis_client:
+        return
+    
+    key = f"session_memory:{session_id}"
+    try:
+        existing = get_session_memory(session_id)
+        existing.update(updates)
+        redis_client.setex(key, CACHE_TTL, json.dumps(existing))
+    except Exception:
+        pass

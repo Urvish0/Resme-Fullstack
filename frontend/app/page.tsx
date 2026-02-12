@@ -597,14 +597,71 @@ export default function Home() {
                         />
                       </div>
                     </div>
-                    <div className="prose-minimal">
-                      <ReactMarkdown>
-                        {activeTab === "resume"
-                          ? jobStatus.result.optimized_resume || ""
-                          : activeTab === "cover"
-                            ? jobStatus.result.cover_letter || ""
-                            : jobStatus.result.cold_email || ""}
-                      </ReactMarkdown>
+                    <div className="prose-minimal space-y-12">
+                      {activeTab === "resume" &&
+                        jobStatus.result.reflection_report && (
+                          <div className="p-8 bg-white/[0.03] backdrop-blur-xl border border-white/10 rounded-2xl space-y-4 shadow-2xl relative overflow-hidden group">
+                            <div className="absolute top-0 left-0 w-1 h-full bg-white/20 group-hover:bg-white/40 transition-colors" />
+                            <div className="flex items-center gap-3">
+                              <div className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
+                              <h3 className="text-[10px] font-black uppercase tracking-[0.3em] text-white/60">
+                                Neural Reflection // Agent Insights
+                              </h3>
+                            </div>
+                            <div className="text-fluid-base text-white/90 leading-relaxed italic font-medium">
+                              <ReactMarkdown>
+                                {jobStatus.result.reflection_report}
+                              </ReactMarkdown>
+                            </div>
+                          </div>
+                        )}
+
+                      {activeTab === "resume" &&
+                        jobStatus.result.old_ats_score !== undefined && (
+                          <div className="grid grid-cols-2 gap-px bg-white/10 border border-white/10 rounded-2xl overflow-hidden backdrop-blur-md shadow-2xl">
+                            <div className="bg-white/[0.02] p-8 group hover:bg-white/[0.04] transition-all">
+                              <p className="text-[10px] font-black uppercase tracking-[0.3em] text-white/40 mb-6 group-hover:text-white/60 transition-colors">
+                                Baseline Score
+                              </p>
+                              <div className="flex items-baseline gap-3">
+                                <span className="text-fluid-5xl serif opacity-20 group-hover:opacity-30 transition-opacity tracking-tighter">
+                                  {jobStatus.result.old_ats_score}
+                                </span>
+                                <span className="text-xs font-bold text-white/10">
+                                  %
+                                </span>
+                              </div>
+                            </div>
+                            <div className="bg-white/[0.06] p-8 border-l border-white/10 group hover:bg-white/[0.08] transition-all relative">
+                              <div className="absolute top-0 right-0 p-4">
+                                <div className="w-2 h-2 rounded-full bg-white shadow-[0_0_15px_rgba(255,255,255,0.8)]" />
+                              </div>
+                              <p className="text-[10px] font-black uppercase tracking-[0.3em] text-white/90 mb-6 font-bold">
+                                Aligned Score
+                              </p>
+                              <div className="flex items-baseline gap-3">
+                                <span className="text-fluid-5xl serif text-white drop-shadow-[0_0_25px_rgba(255,255,255,0.4)] tracking-tighter">
+                                  {jobStatus.result.new_ats_score}
+                                </span>
+                                <span className="text-xs font-bold text-white/40">
+                                  %
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+                        )}
+
+                      <div className="resume-container">
+                        <div className="prose-minimal">
+                          <ReactMarkdown>
+                            {activeTab === "resume"
+                              ? jobStatus.result.optimized_resume || ""
+                              : activeTab === "cover"
+                                ? jobStatus.result.cover_letter || ""
+                                : jobStatus.result.cold_email || ""}
+                          </ReactMarkdown>
+                        </div>
+                      </div>
                     </div>
                   </motion.div>
                 </AnimatePresence>

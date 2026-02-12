@@ -7,6 +7,8 @@ from ..workflows.resume_graph import build_resume_graph
 from ..utils.fingerprint import make_request_fingerprint
 from ..core.redis import redis_client
 from ..core.exceptions import SystemFailure
+from ..utils.cache import get_session_memory, update_session_memory
+from ..core.supabase import SupabaseService
 
 logger = logging.getLogger(__name__)
 logger.info("Workflow Service initialized.")
@@ -98,6 +100,10 @@ def run_resume_workflow(initial_state: dict) -> dict:
     # 2️⃣ Run graph fully
     try:
         graph = build_resume_graph()
+        # 1.5. Load session memory context
+        session_id = initial_state.get("session_id", "default")
+        session_memory = get_session_memory(session_id)
+        
         final_state = graph.invoke(
             {
                 **initial_state,
@@ -105,6 +111,8 @@ def run_resume_workflow(initial_state: dict) -> dict:
                 "extracted_keywords": [],
                 "human_feedback": "proceed",
                 "task_complete": False,
+                "memory_context": session_memory, # Inject memory
+                "user_id": initial_state.get("user_id", "default_user"),
             },
             {"configurable": {"thread_id": "blocking"}},
         )
@@ -121,13 +129,15 @@ def run_resume_workflow(initial_state: dict) -> dict:
     old_ats_score = final_state.get("old_ats_score")
     new_ats_score = final_state.get("new_ats_score")
     extracted_keywords = final_state.get("extracted_keywords", [])
+    reflection_report = final_state.get("reflection_report", "")
 
     # Log extracted values for debugging
     logger.info(
         f"[WORKFLOW] Extracted results - Resume length: {len(optimized_resume)}, "
         f"Cover letter length: {len(cover_letter)}, "
         f"Old ATS: {old_ats_score}, New ATS: {new_ats_score}, "
-        f"Keywords: {len(extracted_keywords)}"
+        f"Keywords: {len(extracted_keywords)}, "
+        f"Reflection length: {len(reflection_report)}"
     )
 
     result = {
@@ -136,7 +146,23 @@ def run_resume_workflow(initial_state: dict) -> dict:
         "old_ats_score": old_ats_score,
         "new_ats_score": new_ats_score,
         "extracted_keywords": extracted_keywords,
+        "reflection_report": reflection_report,
     }
+
+    # 3.5. Update session memory with new insights
+    update_session_memory(session_id, {
+        "last_ats_score": new_ats_score,
+        "last_keywords": extracted_keywords
+    })
+
+    # 3.6. Persist to Supabase (Long-Term Memory)
+    user_id = initial_state.get("user_id", "default_user")
+    SupabaseService.save_resume_version(
+        user_id=user_id,
+        content=optimized_resume,
+        score=new_ats_score,
+        keywords=extracted_keywords
+    )
 
     # 4️⃣ Cache
     try:

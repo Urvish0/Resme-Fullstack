@@ -1,0 +1,35 @@
+# Node
+node_modules
+npm-debug.log
+yarn-error.log
+pnpm-lock.yaml
+
+# Next.js build output
+.next
+out
+
+# Env files
+.env
+.env.*
+!.env.production
+
+# IDE / editor
+.vscode/
+.idea/
+
+# Git
+.git/
+.gitignore
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Tests & docs
+tests/
+__tests__/
+README.md
+
+# Docker (prevent recursive copy)
+Dockerfile
+docker-compose.yaml
