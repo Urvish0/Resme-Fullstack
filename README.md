@@ -515,58 +515,6 @@ ONLY:
 
 ---
 
-## Future Improvements
-
-### Short-Term (Next 3 Months)
-1. **User Authentication & History**
-   - Supabase integration for user accounts
-   - Resume version history with rollback
-   - ATS score tracking over time
-
-2. **Advanced Job Scraping**
-   - Playwright integration for LinkedIn, Indeed (JavaScript-rendered pages)
-   - Automatic job board detection (URL pattern matching)
-   - Structured data extraction (salary, location, requirements)
-
-3. **Batch Processing**
-   - Upload 1 resume → Optimize for 10 job descriptions
-   - Parallel workflow execution (Redis queue)
-   - Bulk export (ZIP download)
-
-### Medium-Term (6 Months)
-4. **Self-Correction Loop**
-   - Reflection agent: Analyzes edited resume for hallucinations
-   - Automatic retry if constraints violated
-   - Confidence scoring for each optimization
-
-5. **Custom Prompt Templates**
-   - User-defined optimization strategies (conservative vs. aggressive)
-   - Industry-specific templates (SWE, PM, Data Science)
-   - A/B testing framework for prompt variants
-
-6. **Real ATS Testing**
-   - Integration with Greenhouse, Lever APIs (if available)
-   - Actual ATS parsing simulation (not LLM-based scoring)
-   - Benchmark against commercial tools (Jobscan, Resumeworded)
-
-### Long-Term (12 Months)
-7. **Multi-Modal Resume Analysis**
-   - Visual resume parsing (PDF layout analysis)
-   - Design feedback (font, spacing, ATS-friendly formatting)
-   - Auto-formatting to ATS-safe templates
-
-8. **Interview Prep Integration**
-   - Generate interview questions from job description
-   - STAR method answer templates based on resume
-   - Mock interview chatbot (voice-enabled)
-
-9. **Recruiter Dashboard**
-   - Reverse tool: Recruiters input resume → Get candidate match score
-   - Bulk candidate screening
-   - Bias detection in job descriptions
-
----
-
 ## Local Setup Instructions
 
 ### Prerequisites
