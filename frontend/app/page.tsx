@@ -21,6 +21,7 @@ import {
   uploadResumeFile,
   fetchJDFromUrl,
   downloadResumePDF,
+  submitHITLFeedback,
 } from "@/lib/api";
 import type { JobStatusResponse, OptimizeRequestExtended } from "@/lib/api";
 import toast from "react-hot-toast";
@@ -60,6 +61,8 @@ export default function Home() {
   const [coldRecipientEmail, setColdRecipientEmail] = useState("");
   const [coldCompanyName, setColdCompanyName] = useState("");
   const [coldTargetRole, setColdTargetRole] = useState("");
+  const [hitlFeedbackText, setHitlFeedbackText] = useState("");
+  const [hitlSubmitting, setHitlSubmitting] = useState(false);
 
   const { scrollYProgress } = useScroll();
   const scaleX = useSpring(scrollYProgress, {
@@ -92,11 +95,13 @@ export default function Home() {
       interval = setInterval(() => {
         setProgress((prev) => {
           const cap = jobStatus.status === "pending" ? 30 : 90;
-          if (prev < cap) return prev + Math.random() * 5; // Faster increment for better feedback
+          if (prev < cap) return prev + Math.random() * 5;
           return prev;
         });
         setStatusMessageIndex((prev) => (prev + 1) % statusMessages.length);
-      }, 1500); // More frequent than the 2s polling to ensure ticks happen
+      }, 1500);
+    } else if (jobStatus.status === "awaiting_feedback") {
+      setProgress(50); // Halfway — paused for human
     } else if (jobStatus.status === "success") {
       setProgress(100);
     }
@@ -170,10 +175,16 @@ export default function Home() {
       try {
         const status = await getJobStatus(jobId);
         setJobStatus(status);
-        if (status.status === "success" || status.status === "failed") {
+        if (
+          status.status === "success" ||
+          status.status === "failed" ||
+          status.status === "awaiting_feedback"
+        ) {
           clearInterval(interval);
-          setLoading(false);
-          localStorage.removeItem("jobId");
+          if (status.status !== "awaiting_feedback") {
+            setLoading(false);
+            localStorage.removeItem("jobId");
+          }
         }
       } catch (e: any) {
         clearInterval(interval);
@@ -500,6 +511,133 @@ export default function Home() {
                 <span className="text-fluid-3xl serif italic">
                   {Math.round(progress)}%
                 </span>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* HITL Feedback Panel */}
+        <AnimatePresence>
+          {jobStatus?.status === "awaiting_feedback" && jobStatus.result && (
+            <motion.div
+              initial={{ opacity: 0, y: 30 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              className="mb-32 border border-white/10 bg-white/[0.02] backdrop-blur-sm overflow-hidden"
+            >
+              <div className="p-8 lg:p-12 space-y-8">
+                <div className="flex items-center gap-3">
+                  <div className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" />
+                  <h3 className="text-xs font-black uppercase tracking-[0.2em] text-amber-400/80">
+                    Human Review Required
+                  </h3>
+                </div>
+
+                {jobStatus.result.old_ats_score !== undefined && (
+                  <div className="flex items-baseline gap-3 mb-4">
+                    <span className="text-[10px] font-black uppercase tracking-widest text-white/40">
+                      Pre-Analysis Score:
+                    </span>
+                    <span className="text-fluid-xl serif text-white/60">
+                      {jobStatus.result.old_ats_score}%
+                    </span>
+                  </div>
+                )}
+
+                <div className="p-6 bg-white/[0.03] border border-white/10 max-h-[300px] overflow-y-auto">
+                  <p className="text-[10px] font-black uppercase tracking-[0.2em] text-white/30 mb-4">
+                    Analysis Report
+                  </p>
+                  <div className="prose-minimal text-fluid-base text-white/80 leading-relaxed">
+                    <ReactMarkdown>
+                      {jobStatus.result.analysis_report ||
+                        "No analysis report available."}
+                    </ReactMarkdown>
+                  </div>
+                </div>
+
+                {jobStatus.result.extracted_keywords &&
+                  jobStatus.result.extracted_keywords.length > 0 && (
+                    <div className="flex flex-wrap gap-2">
+                      <span className="text-[10px] font-black uppercase tracking-widest text-white/30 mr-2 self-center">
+                        Keywords:
+                      </span>
+                      {jobStatus.result.extracted_keywords.map((kw, i) => (
+                        <span
+                          key={i}
+                          className="px-3 py-1 text-[10px] font-bold tracking-wider border border-white/10 text-white/50"
+                        >
+                          {kw}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+
+                <div className="space-y-4 pt-4 border-t border-white/10">
+                  <label className="text-[10px] font-black uppercase tracking-[0.2em] text-white/40">
+                    Your Guidance (Optional)
+                  </label>
+                  <textarea
+                    className="w-full h-24 bg-transparent border border-white/10 focus:border-white/30 resize-none text-fluid-base placeholder:text-white/20 p-4 font-medium transition-colors"
+                    placeholder="e.g. Focus more on leadership experience, emphasize cloud skills, keep it concise..."
+                    value={hitlFeedbackText}
+                    onChange={(e) => setHitlFeedbackText(e.target.value)}
+                  />
+                  <div className="flex gap-4">
+                    <button
+                      disabled={hitlSubmitting}
+                      onClick={async () => {
+                        if (!jobId) return;
+                        setHitlSubmitting(true);
+                        try {
+                          await submitHITLFeedback(
+                            jobId,
+                            hitlFeedbackText.trim() || "proceed",
+                          );
+                          toast.success(
+                            "Feedback submitted — resuming optimization",
+                          );
+                          setHitlFeedbackText("");
+                          setLoading(true);
+                          // Restart polling
+                          const pollInterval = setInterval(async () => {
+                            try {
+                              const s = await getJobStatus(jobId);
+                              setJobStatus(s);
+                              if (
+                                s.status === "success" ||
+                                s.status === "failed"
+                              ) {
+                                clearInterval(pollInterval);
+                                setLoading(false);
+                                localStorage.removeItem("jobId");
+                              }
+                            } catch {
+                              clearInterval(pollInterval);
+                              setLoading(false);
+                            }
+                          }, 2000);
+                        } catch (err) {
+                          toast.error(
+                            err instanceof Error
+                              ? err.message
+                              : "Failed to submit feedback",
+                          );
+                        } finally {
+                          setHitlSubmitting(false);
+                        }
+                      }}
+                      className="px-8 py-4 bg-white text-black text-[10px] font-black uppercase tracking-[0.2em] hover:pr-12 transition-all flex items-center gap-3"
+                    >
+                      {hitlSubmitting
+                        ? "Submitting..."
+                        : hitlFeedbackText.trim()
+                          ? "Submit Guidance"
+                          : "Proceed Without Feedback"}
+                      <ArrowRight className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
               </div>
             </motion.div>
           )}

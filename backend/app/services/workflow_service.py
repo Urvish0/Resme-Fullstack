@@ -4,6 +4,8 @@ import hashlib
 from redis.exceptions import RedisError
 import logging
 from ..workflows.resume_graph import build_resume_graph
+from langgraph.types import Command
+from langgraph.errors import GraphInterrupt
 from ..utils.fingerprint import make_request_fingerprint
 from ..core.redis import redis_client
 from ..core.exceptions import SystemFailure
@@ -75,7 +77,7 @@ def collect_final_result(graph, initial_state: dict) -> dict:
     return final_result
 
 
-def run_resume_workflow(initial_state: dict) -> dict:
+def run_resume_workflow(initial_state: dict, thread_id: str = "blocking") -> dict:
     logger.info("[WORKFLOW] Started")
 
     initial_state["resume_raw_content"] = trim_text(
@@ -97,12 +99,14 @@ def run_resume_workflow(initial_state: dict) -> dict:
     except RedisError:
         logger.warning("[CACHE] Redis GET failed, bypassing cache")
 
-    # 2️⃣ Run graph fully
+    # 2️⃣ Run graph
     try:
         graph = build_resume_graph()
         # 1.5. Load session memory context
         session_id = initial_state.get("session_id", "default")
         session_memory = get_session_memory(session_id)
+        
+        config = {"configurable": {"thread_id": thread_id}}
         
         final_state = graph.invoke(
             {
@@ -111,19 +115,61 @@ def run_resume_workflow(initial_state: dict) -> dict:
                 "extracted_keywords": [],
                 "human_feedback": "proceed",
                 "task_complete": False,
-                "memory_context": session_memory, # Inject memory
+                "memory_context": session_memory,  # Inject memory
                 "user_id": initial_state.get("user_id", "default_user"),
             },
-            {"configurable": {"thread_id": "blocking"}},
+            config,
         )
+        
+        # Phase 6.2 HITL: Check if the graph paused at an interrupt
+        # When using a checkpointer, graph.invoke() returns normally even on interrupt.
+        # We detect interrupts by inspecting the graph state snapshot.
+        state_snapshot = graph.get_state(config)
+        
+        if state_snapshot and state_snapshot.next:
+            # The graph has pending nodes (paused at interrupt)
+            logger.info(f"[WORKFLOW] Graph paused at interrupt. Pending nodes: {state_snapshot.next}. Thread: {thread_id}")
+            
+            # Extract interrupt data from the state snapshot
+            interrupt_data = {}
+            try:
+                # state_snapshot.tasks contains the interrupt info
+                if hasattr(state_snapshot, 'tasks') and state_snapshot.tasks:
+                    for task in state_snapshot.tasks:
+                        if hasattr(task, 'interrupts') and task.interrupts:
+                            for intr in task.interrupts:
+                                if hasattr(intr, 'value') and isinstance(intr.value, dict):
+                                    interrupt_data = intr.value
+                                    break
+                            if interrupt_data:
+                                break
+            except Exception as parse_err:
+                logger.warning(f"[WORKFLOW] Failed to parse interrupt data from snapshot: {parse_err}")
+            
+            # Fallback: extract from the state values directly
+            if not interrupt_data:
+                interrupt_data = {
+                    "analysis_report": final_state.get("analysis_report", ""),
+                    "old_ats_score": final_state.get("old_ats_score"),
+                    "extracted_keywords": final_state.get("extracted_keywords", [])[:15],
+                    "message": "Analysis complete. Provide feedback to guide optimization.",
+                }
+            
+            return {
+                "__interrupted__": True,
+                "thread_id": thread_id,
+                "analysis_report": interrupt_data.get("analysis_report", ""),
+                "old_ats_score": interrupt_data.get("old_ats_score"),
+                "extracted_keywords": interrupt_data.get("extracted_keywords", []),
+                "message": interrupt_data.get("message", "Awaiting feedback"),
+            }
     except Exception as e:
         logger.exception("[WORKFLOW] Graph execution failed")
         raise SystemFailure(
             message="Workflow execution failed", details={"reason": str(e)}
         )
 
-    # 3️⃣ Extract REAL outputs (this is the key fix)
-    # Ensure all fields are properly extracted from final state
+    # 3️⃣ Extract REAL outputs
     optimized_resume = final_state.get("edited_resume_content", "").strip()
     cover_letter = final_state.get("cover_letter_text", "").strip()
     old_ats_score = final_state.get("old_ats_score")
@@ -180,6 +226,55 @@ def run_resume_workflow(initial_state: dict) -> dict:
 
     logger.info("[WORKFLOW] Completed")
     return result
+
+
+def resume_workflow_with_feedback(thread_id: str, feedback: str) -> dict:
+    """
+    Phase 6.2 HITL: Resumes a paused workflow after the user provides feedback.
+    Uses LangGraph Command(resume=...) to unblock the interrupt() call.
+    """
+    logger.info(f"[WORKFLOW] Resuming with feedback. Thread: {thread_id}, Feedback: {feedback[:100]}")
+
+    graph = build_resume_graph()
+
+    try:
+        final_state = graph.invoke(
+            Command(resume=feedback),
+            {"configurable": {"thread_id": thread_id}},
+        )
+    except GraphInterrupt:
+        # Should not happen again, but handle gracefully
+        logger.error("[WORKFLOW] Unexpected second interrupt during resume")
+        return {"__interrupted__": True, "thread_id": thread_id, "message": "Unexpected interrupt"}
+    except Exception as e:
+        logger.exception("[WORKFLOW] Resume failed")
+        raise SystemFailure(
+            message="Workflow resume failed", details={"reason": str(e)}
+        )
+
+    # Extract results (same as run_resume_workflow)
+    optimized_resume = final_state.get("edited_resume_content", "").strip()
+    cover_letter = final_state.get("cover_letter_text", "").strip()
+    old_ats_score = final_state.get("old_ats_score")
+    new_ats_score = final_state.get("new_ats_score")
+    extracted_keywords = final_state.get("extracted_keywords", [])
+    reflection_report = final_state.get("reflection_report", "")
+    resume_json = final_state.get("resume_json")
+
+    logger.info(
+        f"[WORKFLOW] Resumed — Resume length: {len(optimized_resume)}, "
+        f"New ATS: {new_ats_score}"
+    )
+
+    return {
+        "optimized_resume": optimized_resume,
+        "cover_letter": cover_letter,
+        "old_ats_score": old_ats_score,
+        "new_ats_score": new_ats_score,
+        "extracted_keywords": extracted_keywords,
+        "reflection_report": reflection_report,
+        "resume_json": resume_json,
+    }
 
 
 def stream_resume_workflow(

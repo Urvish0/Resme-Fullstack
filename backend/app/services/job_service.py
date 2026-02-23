@@ -10,6 +10,7 @@ logger = logging.getLogger(__name__)
 class JobStatus(str, Enum):
     PENDING = "pending"
     RUNNING = "running"
+    AWAITING_FEEDBACK = "awaiting_feedback"
     SUCCESS = "success"
     FAILED = "failed"
 

@@ -25,7 +25,7 @@ from ...utils.token_guard import enforce_payload_limit
 from ...utils.token_utils import enforce_token_limit
 from ...core.model_limits import MODEL_LIMITS
 from ...services.rate_limiter import is_rate_limited
-from ...services.workflow_service import run_resume_workflow
+from ...services.workflow_service import run_resume_workflow, resume_workflow_with_feedback
 from ...utils.cache import (
     make_cache_key,
     get_cached_result,
@@ -325,7 +325,24 @@ def optimize_resume_async(
                 ).time():
                     # Pass services to workflow so it can conditionally generate
                     initial_state["services_requested"] = services_requested
-                    result = run_resume_workflow(initial_state)
+                    result = run_resume_workflow(initial_state, thread_id=job_id)
+
+                    # Phase 6.2 HITL: Check if workflow was interrupted
+                    if isinstance(result, dict) and result.get("__interrupted__"):
+                        logger.info(f"[ASYNC] Workflow paused for HITL — job {job_id}")
+                        set_job_status(
+                            job_id,
+                            JobStatus.AWAITING_FEEDBACK,
+                            result={
+                                "analysis_report": result.get("analysis_report", ""),
+                                "old_ats_score": result.get("old_ats_score"),
+                                "extracted_keywords": result.get("extracted_keywords", []),
+                                "thread_id": result.get("thread_id", job_id),
+                            },
+                            idempotency_key=idempotency_key,
+                        )
+                        set_idempotent_job(idempotency_key, job_id, JobStatus.AWAITING_FEEDBACK)
+                        return  # Exit background_runner; will resume via /feedback endpoint
             else:
                 # If only cold email, don't run workflow, initialize empty result
                 logger.info("[ASYNC] Only cold email requested, skipping workflow")
@@ -449,6 +466,86 @@ def get_async_status(job_id: str):
         raise HTTPException(status_code=404, detail="Job not found")
 
     return job
+
+
+class HITLFeedbackRequest(BaseModel):
+    feedback: str = Field(default="proceed", min_length=1)
+
+
+@router.post("/feedback/{job_id}")
+def submit_hitl_feedback(job_id: str, payload: HITLFeedbackRequest):
+    """
+    Phase 6.2 HITL: Submit user feedback to resume a paused workflow.
+    The workflow was interrupted at human_review_node and is waiting
+    for the user's guidance before proceeding to resume editing.
+    """
+    job = get_job_status(job_id)
+
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    if job.get("status") != JobStatus.AWAITING_FEEDBACK:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Job is not awaiting feedback. Current status: {job.get('status')}",
+        )
+
+    result_data = job.get("result", {})
+    thread_id = result_data.get("thread_id", job_id)
+    feedback = payload.feedback
+
+    logger.info(f"[HITL] Feedback received for job {job_id}: {feedback[:100]}")
+
+    # Set status to RUNNING while we resume the workflow
+    set_job_status(job_id, JobStatus.RUNNING)
+
+    def resume_runner():
+        job_start = perf_counter()
+        try:
+            increment_active_jobs()
+            JOBS_ACTIVE.inc()
+
+            result = resume_workflow_with_feedback(thread_id, feedback)
+
+            # Check for unexpected second interrupt
+            if isinstance(result, dict) and result.get("__interrupted__"):
+                logger.warning(f"[HITL] Unexpected second interrupt for job {job_id}")
+                set_job_status(
+                    job_id,
+                    JobStatus.AWAITING_FEEDBACK,
+                    result=result,
+                )
+                return
+
+            ### JOB COMPLETED ###
+            set_job_status(
+                job_id,
+                JobStatus.SUCCESS,
+                result=result,
+            )
+            JOBS_COMPLETED_TOTAL.inc()
+
+        except Exception as e:
+            logger.exception(f"[HITL] Resume failed for job {job_id}")
+            set_job_status(
+                job_id,
+                JobStatus.FAILED,
+                error=str(e),
+            )
+            JOBS_FAILED_TOTAL.inc()
+        finally:
+            duration = perf_counter() - job_start
+            JOB_DURATION_SECONDS.observe(duration)
+            JOBS_ACTIVE.dec()
+            decrement_active_jobs()
+
+    threading.Thread(target=resume_runner, daemon=True).start()
+
+    return {
+        "job_id": job_id,
+        "status": JobStatus.RUNNING,
+        "message": "Feedback received. Workflow is resuming.",
+    }
 
 
 @router.get("/pdf/{job_id}")

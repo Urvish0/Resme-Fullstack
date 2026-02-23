@@ -8,6 +8,7 @@ from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.types import interrupt
 
 from ..core.llm import get_analyst_llm, get_editor_llm, get_arbitrator_llm
 from ..core.config import settings
@@ -58,6 +59,9 @@ class ResumeOptimizationState(TypedDict):
     winning_proposal_index: Optional[int]
     # Phase 4: JSON-first output
     resume_json: Optional[dict]
+    # Phase 6: HITL + RAG
+    hitl_feedback: Optional[str]
+    vault_context: Optional[str]
 
 
 class _SimpleResp:
@@ -442,45 +446,49 @@ def resume_analysis_node(state: ResumeOptimizationState) -> ResumeOptimizationSt
 
 def human_review_node(state: ResumeOptimizationState) -> ResumeOptimizationState:
     """
-    Simulates human review and automatically 'approves' to proceed.
-    The actual interrupt() is commented out for automated execution.
+    Phase 6.2 HITL: Pauses the workflow using LangGraph interrupt().
+    The analysis report is sent to the client for review.
+    The user can provide custom feedback to guide the editor,
+    or simply 'proceed' to continue with default behavior.
     """
     messages = state["messages"]
     analysis_report = state["analysis_report"]
+    old_ats_score = state.get("old_ats_score")
+    keywords = state.get("extracted_keywords", [])
 
-    # Simulating the human review by printing the report and auto-setting feedback
     messages.append(
         AIMessage(
-            content=f"Node: `human_review_node` - Analysis report for human review:\n{analysis_report}\n\n"
-        ).model_dump()
-    )
-    messages.append(
-        AIMessage(
-            content="Simulating human review: Automatically setting feedback to 'proceed'."
+            content="Node: `human_review_node` - Analysis report ready for human review."
         ).model_dump()
     )
 
-    # The actual interrupt() for human interaction would go here if not automating:
-    # human_prompt_data = {"analysis_report": analysis_report, "message": "Analysis is complete. Please review and provide feedback, or type 'proceed' to continue."}
-    # human_response_from_ui = interrupt(human_prompt_data)
-    # feedback_text = human_response_from_ui if isinstance(human_response_from_ui, str) else ""
+    # --- LangGraph HITL Interrupt ---
+    # This pauses the graph execution and returns data to the caller.
+    # The caller (background_runner) catches GraphInterrupt and stores
+    # the analysis report in the job status for the frontend to display.
+    human_response = interrupt({
+        "analysis_report": analysis_report,
+        "old_ats_score": old_ats_score,
+        "extracted_keywords": keywords[:15],
+        "message": "Analysis is complete. Review the report and provide feedback to guide the optimization, or click 'Proceed' to continue.",
+    })
 
-    # For this automated version, we simply set feedback to "proceed"
-    feedback_text = "proceed"
+    # After resume: human_response is the feedback string from the user
+    feedback_text = human_response if isinstance(human_response, str) else "proceed"
+    logger.info(f"[HITL] Received human feedback: {feedback_text[:100]}")
 
     messages.append(
         SystemMessage(
-            content="Node: `human_review_node` - Human review (automated) completed. Proceeding."
+            content=f"Node: `human_review_node` - Human feedback received: '{feedback_text[:200]}'"
         ).model_dump()
     )
 
     return {
         **state,
         "human_feedback": feedback_text,
+        "hitl_feedback": feedback_text if feedback_text.lower() != "proceed" else None,
         "messages": messages,
-        # IMPORTANT: Remove "next_agent" from here. This node just updates state.
-        # The routing decision is made by the `determine_next_step` router function.
-        "current_task": "Processing human decision (automated)",
+        "current_task": "Processing human feedback",
     }
 
 
@@ -630,7 +638,7 @@ CRITICAL:
                 content=f"Sub-task: Incorporating human feedback: '{human_feedback}'"
             ).model_dump()
         )
-        editing_instructions += f"\n\nAdditional Instructions: {human_feedback}"
+        editing_instructions += f"\n\n=== USER GUIDANCE (PRIORITY) ===\n{human_feedback}\nFollow this instruction while maintaining all constraints above.\n"
 
     messages.append(
         AIMessage(
@@ -952,6 +960,11 @@ CRITICAL:
 4. DO NOT use '•' bullets, use '-' instead.
 5. NO code blocks, NO intros, NO outros. ONLY THE RESUME.
 """
+
+    # Inject HITL feedback from the human review step
+    hitl_feedback = state.get("hitl_feedback")
+    if hitl_feedback:
+        editing_instructions += f"\n\n=== USER GUIDANCE (PRIORITY) ===\n{hitl_feedback}\nFollow this instruction while maintaining all constraints above.\n"
 
     logger.info(f"[COUNCIL] Editor #{index} ({strategy['name']}) — invoking LLM")
     time.sleep(2.0)  # Rate-limit stagger

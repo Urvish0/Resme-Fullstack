@@ -31,7 +31,7 @@ export interface OptimizeAsyncResponse {
 }
 
 export type JobStatusResponse = {
-    status: "pending" | "running" | "success" | "failed"
+    status: "pending" | "running" | "awaiting_feedback" | "success" | "failed"
     result?: {
       optimized_resume?: string
       cover_letter?: string
@@ -40,6 +40,10 @@ export type JobStatusResponse = {
       new_ats_score?: number
       reflection_report?: string
       resume_json?: Record<string, unknown>
+      // HITL fields (present when status === "awaiting_feedback")
+      analysis_report?: string
+      thread_id?: string
+      extracted_keywords?: string[]
     }
     error?: string
 }
@@ -153,4 +157,29 @@ export async function downloadResumePDF(
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
+}
+
+// Phase 6.2 HITL: Submit feedback for a paused workflow
+export async function submitHITLFeedback(
+    jobId: string,
+    feedback: string
+): Promise<{ job_id: string; status: string; message: string }> {
+    const res = await fetch(`${API_BASE_URL}/optimize/feedback/${jobId}`, {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ feedback }),
+    });
+
+    if (!res.ok) {
+        let detail = "Failed to submit feedback";
+        try {
+            const err = await res.json();
+            detail = err.detail ?? detail;
+        } catch {}
+        throw new Error(detail);
+    }
+
+    return res.json();
 }
