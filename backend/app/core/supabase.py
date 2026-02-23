@@ -1,12 +1,12 @@
-import os
 import logging
 from supabase import create_client, Client
+from .config import settings
 
 logger = logging.getLogger(__name__)
 
-# Supabase configuration
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY") # Use Service Role Key for backend bypass
+# Supabase configuration — loaded from .env via pydantic-settings
+SUPABASE_URL = settings.supabase_url
+SUPABASE_KEY = settings.supabase_service_role_key
 
 supabase: Client = None
 

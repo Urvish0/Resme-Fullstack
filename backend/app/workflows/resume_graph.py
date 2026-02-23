@@ -1,6 +1,7 @@
 import re
 import logging
 import time
+import json as py_json
 from typing import TypedDict, Annotated, List, Literal, Optional
 
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
@@ -8,7 +9,8 @@ from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import InMemorySaver
 
-from ..core.llm import get_llm
+from ..core.llm import get_analyst_llm, get_editor_llm, get_arbitrator_llm
+from ..core.config import settings
 from ..core.supabase import SupabaseService
 from ..utils.text_cleaners import (
     extract_text_from_latex,
@@ -22,7 +24,9 @@ from ..core.exceptions import SystemFailure
 logger = logging.getLogger(__name__)
 logger.info("Resume Graph initialized.")
 
-llm = get_llm()
+analyst_llm = get_analyst_llm()
+editor_llm = get_editor_llm()
+arbitrator_llm = get_arbitrator_llm()
 
 
 class ResumeOptimizationState(TypedDict):
@@ -49,6 +53,11 @@ class ResumeOptimizationState(TypedDict):
     reflection_report: str
     user_id: Optional[str]
     self_correction_count: int
+    # Council of Agents fields
+    editor_proposals: Optional[List[dict]]
+    winning_proposal_index: Optional[int]
+    # Phase 4: JSON-first output
+    resume_json: Optional[dict]
 
 
 class _SimpleResp:
@@ -58,7 +67,7 @@ class _SimpleResp:
 
 def _safe_invoke(target, *args, **kwargs):
     """Call `target.invoke(...)` if available, otherwise call `target(...)` if callable.
-    Always returns an object with a `.content` attribute.
+    Throws RuntimeError on failure instead of swallowing error into a string.
     """
     try:
         fn = getattr(target, "invoke", None)
@@ -77,7 +86,8 @@ def _safe_invoke(target, *args, **kwargs):
         return _SimpleResp(str(resp))
 
     except Exception as e:
-        return _SimpleResp(f"Error invoking target: {e}")
+        logger.error(f"Error invoking target: {e}")
+        raise RuntimeError(f"LLM Call Failed: {e}")
 
 
 def emit(event: str, payload: dict | None = None) -> dict:
@@ -283,15 +293,15 @@ def keyword_extraction_node(state: ResumeOptimizationState) -> ResumeOptimizatio
     logger.info("[LLM] Call started: keyword_extraction")
     try:
         with Timer("llm_invoke for keyword_extraction"):
-            response = _safe_invoke(llm, prompt)
+            response = _safe_invoke(analyst_llm, prompt)
     except Exception as e:
-        logger.exception(
-            "[LLM] Call failed: keyword_extraction",
-            extra={"error_type": "system_error"},
-        )
-        raise SystemFailure(
-            message="Keyword extraction failed", details={"reason": str(e)}
-        )
+        logger.warning(f"Analyst model failed for keyword_extraction, falling back to Editor: {e}")
+        try:
+            with Timer("llm_invoke fallback for keyword_extraction"):
+                response = _safe_invoke(editor_llm, prompt)
+        except Exception as e2:
+            logger.exception("[LLM] Both models failed: keyword_extraction")
+            raise SystemFailure(message="Keyword extraction failed", details={"reason": str(e2)})
     logger.info("[LLM] Call completed: keyword_extraction")
     keywords = [kw.strip() for kw in response.content.split(",") if kw.strip()]
 
@@ -368,28 +378,35 @@ def resume_analysis_node(state: ResumeOptimizationState) -> ResumeOptimizationSt
     time.sleep(1.0)
     try:
         with Timer("llm_invoke for resume_analysis"):
-            response = _safe_invoke(llm, prompt)
+            response = _safe_invoke(analyst_llm, prompt)
     except Exception as e:
-        logger.exception(
-            "[LLM] Call failed: resume_analysis", extra={"error_type": "system_error"}
-        )
-        raise SystemFailure(
-            message="Resume analysis failed", details={"reason": str(e)}
-        )
+        logger.warning(f"Analyst model failed for resume_analysis, falling back to Editor: {e}")
+        try:
+            with Timer("llm_invoke fallback for resume_analysis"):
+                response = _safe_invoke(editor_llm, prompt)
+        except Exception as e2:
+            logger.exception("[LLM] Both models failed: resume_analysis")
+            raise SystemFailure(message="Resume analysis failed", details={"reason": str(e2)})
     logger.info("[LLM] Call completed: resume_analysis")
     analysis_report = response.content
 
-    # Robust regex to catch "ATS Score: **85%**", "ATS Score: 85", etc.
-    score_match = re.search(r"ATS\s*Score\D+(\d+)", analysis_report, re.IGNORECASE)
+    # Debug: Log the raw response for score extraction debugging
+    logger.info(f"[DEBUG] Resume Analysis Response (first 500 chars): {analysis_report[:500]}")
+
+    # More flexible regex to catch various score formats
+    # Matches: "ATS Score: 85%", "Score: 85", "**ATS Score: 85%**", etc.
+    score_match = re.search(r"(?:ATS\s*)?Score\D*?(\d+)\s*%?", analysis_report, re.IGNORECASE)
 
     if score_match:
         old_ats_score = int(score_match.group(1))
+        logger.info(f"[DEBUG] Extracted old_ats_score: {old_ats_score}")
         messages.append(
             AIMessage(
                 content=f"Sub-task: Estimated Original ATS Score: {old_ats_score}%"
             ).model_dump()
         )
     else:
+        logger.warning(f"[DEBUG] Failed to extract ATS score. Response snippet: {analysis_report[:200]}")
         messages.append(
             AIMessage(
                 content="Sub-task: Could not parse original ATS Score from LLM response."
@@ -508,7 +525,10 @@ NEVER:
 4. Fabricate metrics, numbers, or specific accomplishments.
 5. Create new projects or experience items.
 
-VALIDATION RULE: If a keyword is in the Job Description but NOT in the original resume section, DO NOT add it to that section. 
+CRITICAL RULE - NO SECTION BLEEDING:
+Each job in "Professional Experience" must ONLY describe work done AT THAT COMPANY.
+Do NOT add project descriptions or personal project tech to job experience bullets.
+Keep "Projects" and "Professional Experience" strictly separate.
 
 ALWAYS:
 1. Preserve ALL original facts (dates, titles, companies unchanged).
@@ -591,7 +611,7 @@ FORMAT RULES:
 ORIGINAL RESUME:
 {resume_text}
 
-TARGET KEYWORDS (use for alignment reference only):
+TARGET KEYWORDS (integrate these strategically, especially in Professional Summary):
 {", ".join(state.get("extracted_keywords", []))}
 
 OUTPUT THE OPTIMIZED RESUME IN MARKDOWN FORMAT NOW. 
@@ -623,7 +643,7 @@ CRITICAL:
     time.sleep(1.5)
     try:
         with Timer("llm_invoke for resume_editing"):
-            response = _safe_invoke(llm, editing_instructions)
+            response = _safe_invoke(editor_llm, editing_instructions)
         logger.info("[LLM] Call completed: resume_editing")
         raw_response = response.content.strip()
 
@@ -757,6 +777,425 @@ CRITICAL:
     }
 
 
+# ---------------------------------------------------------------------------
+# Council of Agents: 3 strategy-differentiated editors + Arbitrator
+# ---------------------------------------------------------------------------
+
+_EDITOR_STRATEGIES = [
+    {
+        "name": "Keyword Maximizer",
+        "preamble": (
+            "STRATEGY OVERRIDE — KEYWORD MAXIMIZER:\n"
+            "Your PRIMARY goal is to maximize the density and placement of target JD keywords.\n"
+            "- Ensure EVERY target keyword appears at least once, ideally in Summary AND first bullet of relevant jobs.\n"
+            "- Use exact JD phrasing wherever factually accurate.\n"
+            "- Prioritize keyword density over narrative flow.\n\n"
+        ),
+    },
+    {
+        "name": "Narrative Polisher",
+        "preamble": (
+            "STRATEGY OVERRIDE — NARRATIVE POLISHER:\n"
+            "Your PRIMARY goal is to maximize the impact of achievement descriptions.\n"
+            "- Use the strongest possible action verbs: Engineered, Architected, Spearheaded, Orchestrated.\n"
+            "- Frame every bullet as a quantifiable achievement where data exists.\n"
+            "- Prioritize persuasive storytelling while maintaining factual accuracy.\n\n"
+        ),
+    },
+    {
+        "name": "Structure Optimizer",
+        "preamble": (
+            "STRATEGY OVERRIDE — STRUCTURE OPTIMIZER:\n"
+            "Your PRIMARY goal is to maximize ATS parseability through structure.\n"
+            "- Place the most JD-relevant experience items FIRST within each section.\n"
+            "- Ensure crystal-clear section headers matching standard ATS parsers.\n"
+            "- Reorder bullet points within each job: most relevant to JD first.\n"
+            "- Prioritize structural clarity and section ordering over prose polish.\n\n"
+        ),
+    },
+]
+
+
+def _run_single_editor(state: ResumeOptimizationState, strategy: dict, index: int) -> dict:
+    """
+    Run a single editor variant with a specific strategy preamble.
+    Returns {strategy, content, success} dict.
+    """
+    resume_text = state["resume_plain_text"]
+    job_description = state.get("job_description_text", "")
+    keywords = state.get("extracted_keywords", [])
+    memory_context = state.get("memory_context", {})
+    latest_resume = memory_context.get("latest_resume_content") if memory_context else None
+    latest_score = memory_context.get("latest_ats_score") if memory_context else None
+
+    history_context = ""
+    if latest_resume and latest_score:
+        history_context = f"""
+=== HISTORICAL CONTEXT (PREVIOUS BEST VERSION) ===
+Previous ATS Score: {latest_score}%
+Previous Content:
+{latest_resume[:1000]}... [truncated]
+
+GOAL: Your goal is to EXCEED the previous score by refining the content further without over-optimizing. Identify what worked in the last version and build upon it.
+"""
+
+    editing_instructions = f"""{strategy['preamble']}TASK: Act as an expert Senior Technical Recruiter. Optimize the provided resume for ATS matching against the specific Job Description below.
+
+{history_context}
+
+=== JOB DESCRIPTION ===
+{job_description}
+
+=== ABSOLUTE CONSTRAINTS (NEVER violate) ===
+NEVER:
+1. Add ANY skills, tools, or technologies to a specific job/project that were NOT originally in that specific section of the resume.
+2. Bleed information between sections: Do not move tech stack from "Projects" to "Experience" or vice versa unless it was originally present in both.
+3. Invent or modify dates, company names, contact info, or locations.
+4. Fabricate metrics, numbers, or specific accomplishments.
+5. Create new projects or experience items.
+
+CRITICAL RULE - NO SECTION BLEEDING:
+Each job in "Professional Experience" must ONLY describe work done AT THAT COMPANY.
+Do NOT add project descriptions or personal project tech to job experience bullets.
+Keep "Projects" and "Professional Experience" strictly separate.
+
+ALWAYS:
+1. Preserve ALL original facts (dates, titles, companies unchanged).
+2. ONLY REPHRASE: You may improve the prose and verb-strength of EXISTING descriptions.
+3. Maintain 100% factual fidelity to the source section.
+4. REJECT any suggestion to "borrow" skills from one job to benefit another.
+
+=== ALLOWED OPTIMIZATION TECHNIQUES (4 ONLY) ===
+
+[1] PERSUASIVE REPHRASING (SOURCE-ONLY)
+  - Transform passive duties into achievement-oriented results using EXISTING facts.
+  - Use high-impact verbs: "Engineered", "Optimized", "Spearheaded", "Architected", "Automated".
+  - DO NOT add new outcomes. Only rephrase what is already there.
+
+[2] STRATEGIC KEYWORD ALIGNMENT
+  - Integrate target keywords from the JD into the Professional Summary ONLY IF you actually possess those skills (as per the whole resume).
+  - In experience bullets, only use keywords that were originally present in that specific job.
+
+[3] GENERALIZED SUMMARY
+  - Rewrite the Professional Summary to be a bridge between the JD and your actual resume.
+  - It should be professional, slightly generalized to cover your career trajectory, but grounded in resume facts.
+
+[4] CONCISION & CLARITY
+  - Remove fluff and professional filler.
+  - Ensure the formatting is crisp and professional.
+
+=== OUTPUT FORMAT REQUIREMENTS (CRITICAL) ===
+You MUST output the resume in PROPER MARKDOWN format. This is non-negotiable.
+
+```
+# [Full Name]
+[Contact info on one line: city, email, phone, LinkedIn]
+
+---
+
+## Professional Summary
+[2-3 sentence summary paragraph.]
+
+## Technical Skills
+- **Languages:** [list]
+- **Frameworks:** [list]
+- **Tools & Platforms:** [list]
+
+## Professional Experience
+
+### [Job Title] | [Company Name]
+*[Start Date] - [End Date]*
+
+- [Achievement bullet with action verb]
+- [Achievement bullet with action verb]
+
+### [Previous Job Title] | [Previous Company]
+*[Start Date] - [End Date]*
+
+- [Achievement bullet]
+- [Achievement bullet]
+
+## Education
+
+### [Degree] | [University/College]
+*[Year]*
+
+## Certifications
+- [Certification name], [Issuer], [Date]
+
+## Projects
+### [Project Name]
+- [Brief description with technologies used]
+```
+
+FORMAT RULES:
+- Use # for name, ## for sections, ### for job titles/degrees
+- Use **bold** for skill categories
+- Use - (bullet points) for achievements
+- Use *italics* for dates
+- Add blank lines between sections
+- NO code blocks around the output
+- Output ONLY the resume, no explanations
+
+ORIGINAL RESUME:
+{resume_text}
+
+TARGET KEYWORDS (integrate these strategically, especially in Professional Summary):
+{", ".join(keywords)}
+
+OUTPUT THE OPTIMIZED RESUME IN MARKDOWN FORMAT NOW.
+
+CRITICAL:
+1. Use DOUBLE NEWLINES between every header and every paragraph.
+2. Use EXACTLY the headers provided (# for name, ## for sections).
+3. DO NOT output a single paragraph.
+4. DO NOT use '•' bullets, use '-' instead.
+5. NO code blocks, NO intros, NO outros. ONLY THE RESUME.
+"""
+
+    logger.info(f"[COUNCIL] Editor #{index} ({strategy['name']}) — invoking LLM")
+    time.sleep(2.0)  # Rate-limit stagger
+
+    try:
+        with Timer(f"council_editor_{index}"):
+            response = _safe_invoke(editor_llm, editing_instructions)
+        raw = response.content.strip()
+
+        # Apply the same Markdown repair as the original resume_editing_node
+        if "#" not in raw[:200]:
+            sections = {
+                "Professional Summary": r"(?i)^(?:##\s*)?Professional Summary",
+                "Technical Skills": r"(?i)^(?:##\s*)?Technical Skills?",
+                "Professional Experience": r"(?i)^(?:##\s*)?Professional Experience",
+                "Experience": r"(?i)^(?:##\s*)?Experience",
+                "Education": r"(?i)^(?:##\s*)?Education",
+                "Certifications": r"(?i)^(?:##\s*)?Certifications?",
+                "Projects": r"(?i)^(?:##\s*)?Projects"
+            }
+            lines = raw.split("\n")
+            if lines and not lines[0].strip().startswith("#") and len(lines[0]) < 60:
+                lines[0] = f"# {lines[0]}"
+                raw = "\n".join(lines)
+            for key, pattern in sections.items():
+                if re.search(pattern, raw, re.MULTILINE):
+                    raw = re.sub(pattern, f"## {key}", raw, flags=re.MULTILINE | re.IGNORECASE)
+
+        cleaned = clean_resume_response(raw)
+        if len(cleaned) < 50:
+            cleaned = raw
+
+        # Hallucination check
+        placeholders = [
+            r"John Doe", r"johndoe", r"example@",
+            r"123 Main St", r"\(123\)\s*456-7890", r"email@example.com",
+        ]
+        for p in placeholders:
+            if re.search(p, cleaned, flags=re.IGNORECASE) and not re.search(
+                p, resume_text or "", flags=re.IGNORECASE
+            ):
+                logger.warning(f"[COUNCIL] Editor #{index} hallucinated placeholder — skipping")
+                return {"strategy": strategy["name"], "content": "", "success": False}
+
+        logger.info(f"[COUNCIL] Editor #{index} ({strategy['name']}) — {len(cleaned)} chars generated")
+        return {"strategy": strategy["name"], "content": cleaned, "success": True}
+
+    except Exception as e:
+        logger.error(f"[COUNCIL] Editor #{index} ({strategy['name']}) failed: {e}")
+        return {"strategy": strategy["name"], "content": "", "success": False}
+
+
+def council_editing_node(state: ResumeOptimizationState) -> ResumeOptimizationState:
+    """
+    Council of Editors: runs multiple editor instances with different strategies.
+    Each produces an independent resume proposal.
+    """
+    messages = state["messages"]
+    count = min(settings.council_editor_count, len(_EDITOR_STRATEGIES))
+
+    messages.append(
+        HumanMessage(
+            content=f"Node: `council_editing_node` — Spawning {count} editor variants."
+        ).model_dump()
+    )
+
+    proposals = []
+    for i in range(count):
+        strategy = _EDITOR_STRATEGIES[i]
+        proposal = _run_single_editor(state, strategy, i)
+        proposals.append(proposal)
+        messages.append(
+            AIMessage(
+                content=f"Council Editor #{i} ({strategy['name']}): {'✓ Success' if proposal['success'] else '✗ Failed'} — {len(proposal.get('content', ''))} chars"
+            ).model_dump()
+        )
+
+    # Filter to only successful proposals
+    valid = [p for p in proposals if p["success"] and len(p.get("content", "")) > 50]
+
+    if not valid:
+        # Fallback: run original single-editor path
+        logger.warning("[COUNCIL] All editors failed — falling back to single editor")
+        messages.append(
+            AIMessage(
+                content="Warning: All council editors failed. Falling back to single editor."
+            ).model_dump()
+        )
+        return resume_editing_node(state)
+
+    logger.info(f"[COUNCIL] {len(valid)}/{count} editors succeeded. Passing to arbitrator.")
+
+    return {
+        **state,
+        "editor_proposals": proposals,
+        "messages": messages,
+        "next_agent": "arbitrator",
+        "current_task": "Arbitrating best proposal",
+        **emit(
+            event="council_complete",
+            payload={"total": count, "successful": len(valid)},
+        ),
+    }
+
+
+def arbitrator_node(state: ResumeOptimizationState) -> ResumeOptimizationState:
+    """
+    Arbitrator: Uses the high-reasoning model (Gemini Pro) to score and
+    select the best proposal from the Council of Editors.
+    """
+    messages = state["messages"]
+    proposals = state.get("editor_proposals", [])
+    job_description = state.get("job_description_text", "")
+    keywords = state.get("extracted_keywords", [])
+
+    messages.append(
+        HumanMessage(
+            content="Node: `arbitrator_node` — Scoring editor proposals."
+        ).model_dump()
+    )
+
+    valid = [p for p in proposals if p.get("success") and len(p.get("content", "")) > 50]
+
+    if len(valid) == 1:
+        # Only one valid proposal — skip arbitration
+        logger.info("[ARBITRATOR] Only 1 valid proposal — auto-selecting.")
+        winner = valid[0]
+        winner_idx = proposals.index(winner)
+        messages.append(
+            AIMessage(
+                content=f"Arbitrator: Only one valid proposal ({winner['strategy']}) — auto-selected."
+            ).model_dump()
+        )
+        return {
+            **state,
+            "edited_resume_content": winner["content"],
+            "winning_proposal_index": winner_idx,
+            "messages": messages,
+            "next_agent": "final_ats_analysis",
+            "current_task": "Analyzing new ATS score",
+        }
+
+    # Build comparison prompt for the Arbitrator (Gemini Pro)
+    proposals_text = ""
+    for i, p in enumerate(valid):
+        proposals_text += f"\n--- PROPOSAL {i} ({p['strategy']}) ---\n"
+        proposals_text += p["content"][:2500]  # Truncate for prompt size
+        proposals_text += "\n"
+
+    prompt = (
+        "TASK: You are a Senior ATS Scoring Expert. Compare the following resume proposals "
+        "and select the ONE that will score highest on an ATS system for the given job description.\n\n"
+        "SCORING CRITERIA (weight in order):\n"
+        "1. Keyword Coverage (40%): How many target keywords are present and prominent?\n"
+        "2. Keyword Placement (30%): Are keywords in high-value positions (title, summary, first bullets)?\n"
+        "3. Factual Integrity (20%): Does the proposal avoid hallucination or fabrication?\n"
+        "4. Structure Quality (10%): Clean sections, professional formatting?\n\n"
+        f"TARGET KEYWORDS: {', '.join(keywords[:20])}\n\n"
+        f"JOB DESCRIPTION (summary):\n{job_description[:1500]}\n\n"
+        f"{proposals_text}\n\n"
+        "OUTPUT FORMAT (STRICT JSON, no markdown code fences):\n"
+        '{\n'
+        '  "scores": [<score_0>, <score_1>, ...],\n'
+        '  "winner": <index_of_best>,\n'
+        '  "justification": "<1-2 sentence reason>"\n'
+        '}\n\n'
+        "RESPOND WITH JSON ONLY:"
+    )
+
+    logger.info("[ARBITRATOR] Invoking Gemini Pro for proposal scoring")
+    time.sleep(1.0)
+
+    winner_idx = 0  # Default fallback
+    try:
+        with Timer("arbitrator_scoring"):
+            response = _safe_invoke(arbitrator_llm, prompt)
+        res_text = response.content.strip()
+
+        # Parse JSON response
+        json_data = None
+        try:
+            json_data = py_json.loads(res_text)
+        except Exception:
+            # Try extracting JSON from markdown blocks
+            json_match = re.search(r"\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}", res_text, re.DOTALL)
+            if json_match:
+                try:
+                    json_data = py_json.loads(json_match.group(0))
+                except Exception:
+                    pass
+
+        if json_data and "winner" in json_data:
+            winner_idx = int(json_data["winner"])
+            scores = json_data.get("scores", [])
+            justification = json_data.get("justification", "N/A")
+            logger.info(
+                f"[ARBITRATOR] Winner: Proposal #{winner_idx} | Scores: {scores} | {justification}"
+            )
+            messages.append(
+                AIMessage(
+                    content=(
+                        f"Arbitrator Decision: Proposal #{winner_idx} ({valid[winner_idx]['strategy']}) wins.\n"
+                        f"Scores: {scores}\n"
+                        f"Reason: {justification}"
+                    )
+                ).model_dump()
+            )
+        else:
+            logger.warning("[ARBITRATOR] Could not parse winner — defaulting to Proposal #0")
+            messages.append(
+                AIMessage(
+                    content="Arbitrator: Could not parse scoring response — defaulting to Proposal #0."
+                ).model_dump()
+            )
+
+    except Exception as e:
+        logger.error(f"[ARBITRATOR] Scoring failed: {e} — defaulting to Proposal #0")
+        messages.append(
+            AIMessage(
+                content=f"Arbitrator: Scoring failed ({e}) — defaulting to Proposal #0."
+            ).model_dump()
+        )
+
+    # Clamp index to valid range
+    winner_idx = max(0, min(winner_idx, len(valid) - 1))
+    selected = valid[winner_idx]
+
+    return {
+        **state,
+        "edited_resume_content": selected["content"],
+        "winning_proposal_index": winner_idx,
+        "messages": messages,
+        "next_agent": "final_ats_analysis",
+        "current_task": "Analyzing new ATS score",
+        **emit(
+            event="arbitrator_decided",
+            payload={
+                "winner_strategy": selected["strategy"],
+                "winner_index": winner_idx,
+            },
+        ),
+    }
+
+
 def final_ats_analysis_node(state: ResumeOptimizationState) -> ResumeOptimizationState:
     messages = state["messages"]
     job_description = state.get("job_description_text", "")
@@ -802,29 +1241,34 @@ def final_ats_analysis_node(state: ResumeOptimizationState) -> ResumeOptimizatio
     time.sleep(1.0)
     try:
         with Timer("llm_invoke for final_ats_analysis"):
-            response = _safe_invoke(llm, prompt)
+            response = _safe_invoke(analyst_llm, prompt)
     except Exception as e:
-        logger.exception(
-            "[LLM] Call failed: final_ats_analysis",
-            extra={"error_type": "system_error"},
-        )
-        raise SystemFailure(
-            message="Final ATS analysis failed", details={"reason": str(e)}
-        )
+        logger.warning(f"Analyst model failed for final_ats_analysis, falling back to Editor: {e}")
+        try:
+            with Timer("llm_invoke fallback for final_ats_analysis"):
+                response = _safe_invoke(editor_llm, prompt)
+        except Exception as e2:
+            logger.exception("[LLM] Both models failed: final_ats_analysis")
+            raise SystemFailure(message="Final ATS analysis failed", details={"reason": str(e2)})
     logger.info("[LLM] Call completed: final_ats_analysis")
     new_analysis_summary = response.content
 
-    # Robust regex for ATS score
-    score_match = re.search(r"ATS\s*Score\D+(\d+)", new_analysis_summary, re.IGNORECASE)
+    # Debug: Log the raw response for score extraction debugging
+    logger.info(f"[DEBUG] Final ATS Analysis Response (first 500 chars): {new_analysis_summary[:500]}")
+
+    # More flexible regex to catch various score formats
+    score_match = re.search(r"(?:ATS\s*)?Score\D*?(\d+)\s*%?", new_analysis_summary, re.IGNORECASE)
 
     if score_match:
         new_ats_score = int(score_match.group(1))
+        logger.info(f"[DEBUG] Extracted new_ats_score: {new_ats_score}")
         messages.append(
             AIMessage(
                 content=f"Sub-task: Estimated Optimized ATS Score: {new_ats_score}%"
             ).model_dump()
         )
     else:
+        logger.warning(f"[DEBUG] Failed to extract new ATS score. Response snippet: {new_analysis_summary[:200]}")
         messages.append(
             AIMessage(
                 content="Sub-task: Could not parse new ATS Score from LLM response."
@@ -844,6 +1288,165 @@ def final_ats_analysis_node(state: ResumeOptimizationState) -> ResumeOptimizatio
     return {
         **state,
         "new_ats_score": new_ats_score,
+        "messages": messages,
+        "next_agent": "json_extraction",
+        "current_task": "Extracting structured JSON from resume",
+    }
+
+
+def json_extraction_node(state: ResumeOptimizationState) -> ResumeOptimizationState:
+    """
+    Phase 4.1: Converts raw Markdown resume content into structured ResumeJSON.
+    This enables headless rendering into PDF, LaTeX, or any format.
+    """
+    messages = state["messages"]
+    edited_resume = state.get("edited_resume_content", "")
+
+    messages.append(
+        HumanMessage(
+            content="Node: `json_extraction_node` — Parsing resume into structured JSON."
+        ).model_dump()
+    )
+
+    if not edited_resume or len(edited_resume.strip()) < 50:
+        logger.warning("[JSON_EXTRACT] No resume content to parse — skipping.")
+        messages.append(
+            AIMessage(content="JSON extraction skipped: no resume content.").model_dump()
+        )
+        return {
+            **state,
+            "resume_json": None,
+            "messages": messages,
+            "next_agent": "reflection",
+            "current_task": "Self-reflecting on results",
+        }
+
+    prompt = (
+        "TASK: Parse the following resume text into a structured JSON object.\n\n"
+        "OUTPUT FORMAT (STRICT JSON, no markdown fences, no explanation):\n"
+        '{\n'
+        '  "contact": {\n'
+        '    "name": "...",\n'
+        '    "email": "...",\n'
+        '    "phone": "...",\n'
+        '    "location": "...",\n'
+        '    "linkedin": "...",\n'
+        '    "github": "...",\n'
+        '    "portfolio": null\n'
+        '  },\n'
+        '  "summary": "Professional summary paragraph...",\n'
+        '  "skills": [\n'
+        '    {"category": "Languages", "skills": ["Python", "JavaScript"]},\n'
+        '    {"category": "Frameworks", "skills": ["React", "FastAPI"]}\n'
+        '  ],\n'
+        '  "experience": [\n'
+        '    {\n'
+        '      "title": "Software Engineer",\n'
+        '      "company": "Acme Corp",\n'
+        '      "location": "San Francisco, CA",\n'
+        '      "start_date": "Jan 2023",\n'
+        '      "end_date": "Present",\n'
+        '      "bullets": ["Engineered X achieving Y..."]\n'
+        '    }\n'
+        '  ],\n'
+        '  "education": [\n'
+        '    {\n'
+        '      "degree": "B.S. Computer Science",\n'
+        '      "institution": "MIT",\n'
+        '      "location": null,\n'
+        '      "year": "2022",\n'
+        '      "gpa": null,\n'
+        '      "details": []\n'
+        '    }\n'
+        '  ],\n'
+        '  "projects": [\n'
+        '    {\n'
+        '      "name": "Project Name",\n'
+        '      "description": "Brief description",\n'
+        '      "technologies": ["React", "Node.js"],\n'
+        '      "bullets": ["Built X..."],\n'
+        '      "url": null\n'
+        '    }\n'
+        '  ],\n'
+        '  "certifications": [\n'
+        '    {"name": "AWS Solutions Architect", "issuer": "Amazon", "date": "2024"}\n'
+        '  ]\n'
+        '}\n\n'
+        "RULES:\n"
+        "1. Extract EVERY section from the resume — do not skip any.\n"
+        "2. If a field is missing from the source, use null (not empty string).\n"
+        "3. Preserve exact dates, company names, and facts.\n"
+        "4. Do NOT invent or add any information.\n"
+        "5. Return ONLY the JSON object, no explanation or wrapping.\n\n"
+        f"RESUME TEXT:\n{edited_resume}\n\n"
+        "JSON:"
+    )
+
+    logger.info("[JSON_EXTRACT] Invoking LLM for structured extraction")
+    time.sleep(1.0)
+
+    resume_json = None
+    try:
+        with Timer("json_extraction"):
+            response = _safe_invoke(analyst_llm, prompt)
+        res_text = response.content.strip()
+
+        # Parse JSON — try multiple strategies
+        try:
+            resume_json = py_json.loads(res_text)
+        except Exception:
+            # Strip markdown code fences if present
+            cleaned = res_text
+            if cleaned.startswith("```"):
+                cleaned = re.sub(r"^```(?:json)?\n?", "", cleaned)
+                cleaned = re.sub(r"\n?```$", "", cleaned)
+            try:
+                resume_json = py_json.loads(cleaned)
+            except Exception:
+                # Last resort: regex extract
+                json_match = re.search(r"\{.*\}", cleaned, re.DOTALL)
+                if json_match:
+                    try:
+                        resume_json = py_json.loads(json_match.group(0))
+                    except Exception:
+                        pass
+
+        if resume_json and "contact" in resume_json:
+            # Validate with Pydantic schema
+            from ..schemas.resume_schema import ResumeJSON as ResumeJSONSchema
+            validated = ResumeJSONSchema(**resume_json)
+            resume_json = validated.model_dump()
+            logger.info(
+                f"[JSON_EXTRACT] Success — {len(resume_json.get('experience', []))} experiences, "
+                f"{len(resume_json.get('skills', []))} skill categories extracted."
+            )
+            messages.append(
+                AIMessage(
+                    content=f"JSON extraction complete: {validated.contact.name} — "
+                    f"{len(validated.experience)} jobs, "
+                    f"{len(validated.skills)} skill categories."
+                ).model_dump()
+            )
+        else:
+            logger.warning("[JSON_EXTRACT] Parsed JSON is missing 'contact' field — marking as failed.")
+            resume_json = None
+            messages.append(
+                AIMessage(
+                    content="JSON extraction produced incomplete data — falling back to Markdown only."
+                ).model_dump()
+            )
+
+    except Exception as e:
+        logger.error(f"[JSON_EXTRACT] Failed: {e}")
+        messages.append(
+            AIMessage(
+                content=f"JSON extraction failed ({e}) — falling back to Markdown only."
+            ).model_dump()
+        )
+
+    return {
+        **state,
+        "resume_json": resume_json,
         "messages": messages,
         "next_agent": "reflection",
         "current_task": "Self-reflecting on results",
@@ -885,22 +1488,60 @@ def reflection_node(state: ResumeOptimizationState) -> ResumeOptimizationState:
     # Smart Stagger for Rate Limits
     time.sleep(1.5)
     try:
-        response = _safe_invoke(llm, prompt)
+        try:
+            response = _safe_invoke(analyst_llm, prompt)
+        except Exception as e:
+            logger.warning(f"Analyst model failed for reflection, falling back to Editor: {e}")
+            response = _safe_invoke(editor_llm, prompt)
+        
         import json as py_json
         res_text = response.content.strip()
-        # Clean potential markdown blocks
-        if res_text.startswith("```"):
-            if "json" in res_text[:10]:
-                res_text = res_text.split("```json", 1)[1].split("```", 1)[0].strip()
-            else:
-                res_text = res_text.split("```", 2)[1].strip()
         
-        reflection_data = py_json.loads(res_text)
-        reflection_report = f"- **The Good**: {reflection_data.get('good')}\n- **The Gap**: {reflection_data.get('gap')}\n- **Integrity**: {reflection_data.get('integrity_status')}"
-        should_retry = reflection_data.get("should_retry", False)
-        retry_instruction = reflection_data.get("retry_reason", "")
+        # Debug: Log raw reflection response
+        logger.info(f"[DEBUG] Reflection raw response (first 300 chars): {res_text[:300]}")
+        
+        # More resilient JSON extraction - try multiple strategies
+        json_data = None
+        
+        # Strategy 1: Direct JSON parse
+        try:
+            json_data = py_json.loads(res_text)
+        except Exception:
+            pass
+        
+        # Strategy 2: Extract JSON from markdown code blocks
+        if not json_data:
+            if res_text.startswith("```"):
+                if "json" in res_text[:20]:
+                    res_text = res_text.split("```json", 1)[1].split("```", 1)[0].strip()
+                else:
+                    res_text = res_text.split("```", 2)[1].strip()
+                try:
+                    json_data = py_json.loads(res_text)
+                except Exception:
+                    pass
+        
+        # Strategy 3: Regex extraction of JSON object
+        if not json_data:
+            json_match = re.search(r"\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}", res_text, re.DOTALL)
+            if json_match:
+                try:
+                    json_data = py_json.loads(json_match.group(0))
+                except Exception:
+                    pass
+        
+        if json_data:
+            reflection_data = json_data
+            reflection_report = f"- **The Good**: {reflection_data.get('good', 'N/A')}\n- **The Gap**: {reflection_data.get('gap', 'N/A')}\n- **Integrity**: {reflection_data.get('integrity_status', 'N/A')}"
+            should_retry = reflection_data.get("should_retry", False)
+            retry_instruction = reflection_data.get("retry_reason", "")
+            logger.info("[DEBUG] Reflection JSON parsed successfully")
+        else:
+            raise ValueError("Could not extract valid JSON from reflection response")
+            
     except Exception as e:
         logger.error(f"Reflection failed: {e}")
+        logger.error(f"[DEBUG] Reflection response that failed: {response.content[:500] if hasattr(response, 'content') else 'N/A'}")
         reflection_report = "Reflection node failed to generate report."
         should_retry = False
         retry_instruction = ""
@@ -918,6 +1559,9 @@ def reflection_node(state: ResumeOptimizationState) -> ResumeOptimizationState:
         "messages": messages,
         "current_task": "Finalizing output",
     }
+    
+    # DISABLED: Retry logic causes backend crashes - always proceed forward
+    should_retry = False
     
     if should_retry:
         new_state["human_feedback"] = f"AUTO-RETRY INSTRUCTION: {retry_instruction}"
@@ -1082,7 +1726,7 @@ def cover_letter_analysis_node(
     logger.info("[LLM] Call started: cover_letter_analysis")
     try:
         with Timer("llm_invoke for cover_letter_analysis"):
-            response = _safe_invoke(llm, prompt)
+            response = _safe_invoke(analyst_llm, prompt)
     except Exception as e:
         logger.exception(
             "[LLM] Call failed: cover_letter_analysis",
@@ -1141,7 +1785,7 @@ def cover_letter_generation_node(
     logger.info("[LLM] Call started: cover_letter_generation")
     try:
         with Timer("llm_invoke for cover_letter_generation"):
-            response = _safe_invoke(llm, prompt)
+            response = _safe_invoke(editor_llm, prompt)
     except Exception as e:
         logger.exception(
             "[LLM] Call failed: cover_letter_generation",
@@ -1252,6 +1896,9 @@ def save_cover_letter_to_markdown(content: str) -> str:
 
 ### Graph Construction ###
 
+COUNCIL_MODE = settings.enable_council_mode
+logger.info(f"[GRAPH] Council mode: {'ENABLED' if COUNCIL_MODE else 'DISABLED'}")
+
 workflow = StateGraph(ResumeOptimizationState)
 
 workflow.add_node("ingestion", ingestion_node)
@@ -1261,12 +1908,21 @@ workflow.add_node("human_review", human_review_node)
 workflow.add_node(
     "determine_next_step", determine_next_step
 )  # This is now a router node
-workflow.add_node("resume_editing", resume_editing_node)
 workflow.add_node("final_ats_analysis", final_ats_analysis_node)
+workflow.add_node("json_extraction", json_extraction_node)
 workflow.add_node("reflection", reflection_node)
 workflow.add_node("cover_letter_analysis", cover_letter_analysis_node)
 workflow.add_node("cover_letter_generation", cover_letter_generation_node)
 workflow.add_node("final_response", final_response_node)
+
+if COUNCIL_MODE:
+    # Council of Agents path
+    workflow.add_node("council_editing", council_editing_node)
+    workflow.add_node("arbitrator", arbitrator_node)
+    # Keep single editor as fallback node
+    workflow.add_node("resume_editing", resume_editing_node)
+else:
+    workflow.add_node("resume_editing", resume_editing_node)
 
 workflow.set_entry_point("ingestion")
 
@@ -1275,24 +1931,68 @@ workflow.add_edge("keyword_extraction", "resume_analysis")
 workflow.add_edge("resume_analysis", "human_review")
 
 
-# KEY CHANGE: Conditional edges from the router node itself
-workflow.add_conditional_edges(
-    "human_review",  # The node that returns the routing decision
-    determine_next_step,  # The function that makes the routing decision
-    {
-        "resume_editing": "resume_editing",
-        "cover_letter_analysis": "cover_letter_analysis",
-        "final_response": "final_response",
-        END: END,
-    },
-)
+if COUNCIL_MODE:
+    # Route: human_review -> council_editing (for resume) or cover_letter/final
+    def determine_next_step_council(
+        state: ResumeOptimizationState,
+    ) -> Literal["council_editing", "cover_letter_analysis", "final_response", END]:
+        feedback = state.get("human_feedback", "").lower().strip()
+        if feedback == "exit" or feedback == "done":
+            return END
+        services = state.get("services_requested", [])
+        if "resume" in services:
+            return "council_editing"
+        if "cover" in services:
+            return "cover_letter_analysis"
+        return "final_response"
 
-workflow.add_edge("resume_editing", "final_ats_analysis")
-workflow.add_edge("final_ats_analysis", "reflection")
+    workflow.add_conditional_edges(
+        "human_review",
+        determine_next_step_council,
+        {
+            "council_editing": "council_editing",
+            "cover_letter_analysis": "cover_letter_analysis",
+            "final_response": "final_response",
+            END: END,
+        },
+    )
+    workflow.add_edge("council_editing", "arbitrator")
+    workflow.add_edge("arbitrator", "final_ats_analysis")
+    # Fallback edge: if council falls back to single editor
+    workflow.add_edge("resume_editing", "final_ats_analysis")
+else:
+    # Original single-editor path
+    workflow.add_conditional_edges(
+        "human_review",
+        determine_next_step,
+        {
+            "resume_editing": "resume_editing",
+            "cover_letter_analysis": "cover_letter_analysis",
+            "final_response": "final_response",
+            END: END,
+        },
+    )
+    workflow.add_edge("resume_editing", "final_ats_analysis")
+
+workflow.add_edge("final_ats_analysis", "json_extraction")
+workflow.add_edge("json_extraction", "reflection")
+
+
+# Reflection routing — same for both modes
+def _route_after_reflection_for_mode(
+    state: ResumeOptimizationState,
+) -> Literal["resume_editing", "cover_letter_analysis", "final_response"]:
+    next_agent = state.get("next_agent")
+    if next_agent == "resume_editing":
+        return "resume_editing"
+    services = state.get("services_requested", [])
+    if "cover" in services:
+        return "cover_letter_analysis"
+    return "final_response"
 
 workflow.add_conditional_edges(
     "reflection",
-    route_after_reflection,
+    _route_after_reflection_for_mode,
     {
         "resume_editing": "resume_editing",
         "cover_letter_analysis": "cover_letter_analysis",

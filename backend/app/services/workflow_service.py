@@ -130,6 +130,7 @@ def run_resume_workflow(initial_state: dict) -> dict:
     new_ats_score = final_state.get("new_ats_score")
     extracted_keywords = final_state.get("extracted_keywords", [])
     reflection_report = final_state.get("reflection_report", "")
+    resume_json = final_state.get("resume_json")
 
     # Log extracted values for debugging
     logger.info(
@@ -137,7 +138,8 @@ def run_resume_workflow(initial_state: dict) -> dict:
         f"Cover letter length: {len(cover_letter)}, "
         f"Old ATS: {old_ats_score}, New ATS: {new_ats_score}, "
         f"Keywords: {len(extracted_keywords)}, "
-        f"Reflection length: {len(reflection_report)}"
+        f"Reflection length: {len(reflection_report)}, "
+        f"JSON: {'YES' if resume_json else 'NO'}"
     )
 
     result = {
@@ -147,6 +149,7 @@ def run_resume_workflow(initial_state: dict) -> dict:
         "new_ats_score": new_ats_score,
         "extracted_keywords": extracted_keywords,
         "reflection_report": reflection_report,
+        "resume_json": resume_json,
     }
 
     # 3.5. Update session memory with new insights

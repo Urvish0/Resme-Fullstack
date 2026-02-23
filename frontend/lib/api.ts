@@ -39,6 +39,7 @@ export type JobStatusResponse = {
       old_ats_score?: number
       new_ats_score?: number
       reflection_report?: string
+      resume_json?: Record<string, unknown>
     }
     error?: string
 }
@@ -117,4 +118,39 @@ export async function fetchJDFromUrl(url: string): Promise<{ job_description: st
     }
 
     return res.json();
+}
+
+// Download resume as PDF
+export async function downloadResumePDF(
+    jobId: string,
+    template: "modern" | "classic" | "minimalist" = "modern"
+): Promise<void> {
+    const res = await fetch(
+        `${API_BASE_URL}/optimize/pdf/${jobId}?template=${template}`
+    );
+
+    if (!res.ok) {
+        let detail = "PDF download failed";
+        try {
+            const err = await res.json();
+            detail = err.detail ?? detail;
+        } catch {}
+        throw new Error(detail);
+    }
+
+    // Extract filename from Content-Disposition header
+    const disposition = res.headers.get("Content-Disposition");
+    const filenameMatch = disposition?.match(/filename="(.+)"/);
+    const filename = filenameMatch?.[1] ?? `resume_${template}.pdf`;
+
+    // Trigger browser download
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
 }

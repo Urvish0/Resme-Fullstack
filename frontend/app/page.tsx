@@ -20,6 +20,7 @@ import {
   getJobStatus,
   uploadResumeFile,
   fetchJDFromUrl,
+  downloadResumePDF,
 } from "@/lib/api";
 import type { JobStatusResponse, OptimizeRequestExtended } from "@/lib/api";
 import toast from "react-hot-toast";
@@ -33,6 +34,9 @@ function cn(...inputs: ClassValue[]) {
 export default function Home() {
   const [jobId, setJobId] = useState<string | null>(null);
   const [jobStatus, setJobStatus] = useState<JobStatusResponse | null>(null);
+  const [selectedTemplate, setSelectedTemplate] = useState<
+    "modern" | "classic" | "minimalist"
+  >("modern");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<"resume" | "cover" | "cold">(
@@ -456,6 +460,19 @@ export default function Home() {
           </button>
         </div>
 
+        {/* AI Disclaimer */}
+        <div className="mb-16 px-6 py-5 border border-white/[0.06] bg-white/[0.02] rounded-sm backdrop-blur-sm">
+          <p className="text-[11px] text-white/40 leading-relaxed tracking-wide">
+            <span className="text-white/60 font-bold uppercase tracking-widest text-[10px]">
+              ⚠ Note —
+            </span>{" "}
+            This tool uses AI to generate optimized content. AI outputs may not
+            always be perfectly accurate. Please review all generated resumes,
+            cover letters, and outreach emails carefully before using them. Edit
+            and verify facts, dates, and claims to ensure accuracy.
+          </p>
+        </div>
+
         {/* Real-time Status */}
         <AnimatePresence>
           {jobId && (
@@ -595,6 +612,61 @@ export default function Home() {
                             )
                           }
                         />
+                        {activeTab === "resume" &&
+                          jobStatus.result?.resume_json &&
+                          jobId && (
+                            <div className="flex items-center gap-2 ml-2 pl-2 border-l border-white/10">
+                              <select
+                                value={selectedTemplate}
+                                onChange={(e) =>
+                                  setSelectedTemplate(
+                                    e.target.value as
+                                      | "modern"
+                                      | "classic"
+                                      | "minimalist",
+                                  )
+                                }
+                                className="bg-transparent text-[10px] font-bold uppercase tracking-widest text-white/40 border border-white/10 rounded px-2 py-1.5 focus:outline-none focus:border-white/30 cursor-pointer"
+                              >
+                                <option value="modern" className="bg-black">
+                                  Modern
+                                </option>
+                                <option value="classic" className="bg-black">
+                                  Classic
+                                </option>
+                                <option value="minimalist" className="bg-black">
+                                  Minimalist
+                                </option>
+                              </select>
+                              <button
+                                onClick={async () => {
+                                  try {
+                                    toast.loading("Generating PDF...", {
+                                      id: "pdf",
+                                    });
+                                    await downloadResumePDF(
+                                      jobId,
+                                      selectedTemplate,
+                                    );
+                                    toast.success("PDF downloaded!", {
+                                      id: "pdf",
+                                    });
+                                  } catch (err) {
+                                    toast.error(
+                                      err instanceof Error
+                                        ? err.message
+                                        : "PDF download failed",
+                                      { id: "pdf" },
+                                    );
+                                  }
+                                }}
+                                className="flex items-center gap-1.5 px-3 py-1.5 bg-white/[0.06] hover:bg-white/[0.12] border border-white/10 rounded text-[10px] font-bold uppercase tracking-widest text-white/60 hover:text-white transition-all"
+                              >
+                                <DownloadIcon className="w-3 h-3" />
+                                PDF
+                              </button>
+                            </div>
+                          )}
                       </div>
                     </div>
                     <div className="prose-minimal space-y-12">

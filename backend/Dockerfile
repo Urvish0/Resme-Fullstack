@@ -30,7 +30,7 @@ ENV PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
-# REQUIRED Linux system libraries for Chromium
+# REQUIRED Linux system libraries for Chromium + WeasyPrint PDF
 RUN apt-get update && apt-get install -y \
     libglib2.0-0 \
     libnss3 \
@@ -56,6 +56,10 @@ RUN apt-get update && apt-get install -y \
     fonts-liberation \
     ca-certificates \
     curl \
+    # WeasyPrint PDF rendering dependencies
+    libgdk-pixbuf-2.0-0 \
+    libffi-dev \
+    libharfbuzz0b \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy Python packages from builder

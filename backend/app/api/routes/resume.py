@@ -451,6 +451,61 @@ def get_async_status(job_id: str):
     return job
 
 
+@router.get("/pdf/{job_id}")
+def download_resume_pdf(
+    job_id: str,
+    template: str = Query("modern", enum=["modern", "classic", "minimalist"]),
+):
+    """
+    Download the optimized resume as a styled PDF.
+    Requires the job to have completed successfully with resume_json.
+    """
+    from ...services.pdf_service import render_resume_pdf
+    import io
+
+    job = get_job_status(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    if job.get("status") != JobStatus.SUCCESS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Job is not complete. Current status: {job.get('status')}",
+        )
+
+    result = job.get("result", {})
+    resume_json = result.get("resume_json")
+
+    if not resume_json:
+        raise HTTPException(
+            status_code=400,
+            detail="No structured resume data available for this job. "
+            "Resume JSON extraction may have failed.",
+        )
+
+    try:
+        pdf_bytes = render_resume_pdf(resume_json, template=template)
+    except Exception as e:
+        logger.exception(f"[PDF] Rendering failed for job {job_id}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"PDF generation failed: {str(e)}",
+        )
+
+    # Extract name for filename
+    contact_name = resume_json.get("contact", {}).get("name", "resume")
+    safe_name = "".join(c for c in contact_name if c.isalnum() or c in " -_").strip()
+    safe_name = safe_name.replace(" ", "_") or "resume"
+
+    return StreamingResponse(
+        io.BytesIO(pdf_bytes),
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="{safe_name}_{template}.pdf"',
+            "Content-Length": str(len(pdf_bytes)),
+        },
+    )
+
 @router.post("/upload")
 async def upload_resume(file: UploadFile = File(...)):
     filename = file.filename.lower()
