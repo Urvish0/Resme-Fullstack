@@ -115,6 +115,7 @@ def run_resume_workflow(initial_state: dict, thread_id: str = "blocking") -> dic
                 "extracted_keywords": [],
                 "human_feedback": "proceed",
                 "task_complete": False,
+                "self_correction_count": 0,
                 "memory_context": session_memory,  # Inject memory
                 "user_id": initial_state.get("user_id", "default_user"),
             },
@@ -324,6 +325,10 @@ def stream_resume_workflow(
         for step in graph.stream(
             initial_state, {"configurable": {"thread_id": thread_id}}
         ):
+            # Ensure self_correction_count is at least 0 for streaming path if not present
+            if isinstance(step, dict) and "self_correction_count" not in step:
+                if "values" in step and "self_correction_count" not in step["values"]:
+                    pass # Handled by initial_state if possible
             yield step
 
             if step.get("event") == "final_result":

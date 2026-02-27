@@ -337,7 +337,21 @@ def optimize_resume_async(
                                 "analysis_report": result.get("analysis_report", ""),
                                 "old_ats_score": result.get("old_ats_score"),
                                 "extracted_keywords": result.get("extracted_keywords", []),
+                                "vault_context": result.get("vault_context"),
                                 "thread_id": result.get("thread_id", job_id),
+                                # Preserve original request context for resumption
+                                "services_requested": services_requested,
+                                "cold_email_params": {
+                                    "sender_name": payload.cold_email_sender_name,
+                                    "sender_email": payload.cold_email_sender_email,
+                                    "recipient_name": payload.cold_email_recipient_name,
+                                    "recipient_email": payload.cold_email_recipient_email,
+                                    "company_name": payload.cold_email_company_name,
+                                    "target_role": payload.cold_email_target_role,
+                                },
+                                # Save raw inputs for resumption/cold email
+                                "job_description_raw": payload.job_description,
+                                "resume_raw_content": payload.resume_text
                             },
                             idempotency_key=idempotency_key,
                         )
@@ -516,6 +530,30 @@ def submit_hitl_feedback(job_id: str, payload: HITLFeedbackRequest):
                     result=result,
                 )
                 return
+
+            # After workflow resumption, check if cold email generation is needed
+            services_requested = result_data.get("services_requested", [])
+            cold_params = result_data.get("cold_email_params", {})
+            
+            if ("coldEmail" in services_requested or "cold_email" in services_requested) and result:
+                try:
+                    logger.info(f"[HITL] Cold email requested after resume — generating for job {job_id}")
+                    # Use the original resume if optimized one is not available yet (though it should be)
+                    resume_to_use = result.get("optimized_resume") or result_data.get("resume_raw_content", "")
+                    
+                    cold_email_text = generate_cold_email(
+                        resume_text=resume_to_use,
+                        job_description=result_data.get("job_description_raw", ""),
+                        sender_name=cold_params.get("sender_name"),
+                        sender_email=cold_params.get("sender_email"),
+                        recipient_name=cold_params.get("recipient_name"),
+                        recipient_email=cold_params.get("recipient_email"),
+                        company_name=cold_params.get("company_name"),
+                        target_role=cold_params.get("target_role"),
+                    )
+                    result["cold_email"] = cold_email_text
+                except Exception as ce_err:
+                    logger.warning(f"[HITL] Cold email generation failed after resume: {ce_err}")
 
             ### JOB COMPLETED ###
             set_job_status(

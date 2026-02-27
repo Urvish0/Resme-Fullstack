@@ -14,6 +14,9 @@ import {
   RefreshCcw,
   Plus,
   ArrowRight,
+  Trash2,
+  Folder,
+  Lock,
 } from "lucide-react";
 import {
   optimizeResumeAsync,
@@ -555,7 +558,6 @@ export default function Home() {
                     </ReactMarkdown>
                   </div>
                 </div>
-
                 {jobStatus.result.extracted_keywords &&
                   jobStatus.result.extracted_keywords.length > 0 && (
                     <div className="flex flex-wrap gap-2">

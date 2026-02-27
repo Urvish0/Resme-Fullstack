@@ -10,6 +10,9 @@ class Settings(BaseSettings):
 
     langsmith_tracing: str = Field("true", env="LANGSMITH_TRACING")
     langsmith_project: str = Field("ResMe-Fullstack", env="LANGSMITH_PROJECT")
+
+    # Hugging Face
+    hf_token: str | None = Field(None, env="HF_TOKEN")
     # App environment
     env: str = Field("development", env="ENV")
 
@@ -19,7 +22,7 @@ class Settings(BaseSettings):
     # Model configuration
     model_analyst: str = Field("llama-3.3-70b-versatile", env="MODEL_ANALYST")
     model_editor: str = Field("llama-3.1-8b-instant", env="MODEL_EDITOR")
-    model_gemini: str = Field("gemini-2.0-flash", env="MODEL_GEMINI")
+    model_gemini: str = Field("gemini-1.5-flash", env="MODEL_GEMINI")
 
     # Supabase
     supabase_url: str | None = Field(None, env="SUPABASE_URL")

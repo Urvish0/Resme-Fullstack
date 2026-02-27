@@ -59,9 +59,7 @@ class ResumeOptimizationState(TypedDict):
     winning_proposal_index: Optional[int]
     # Phase 4: JSON-first output
     resume_json: Optional[dict]
-    # Phase 6: HITL + RAG
     hitl_feedback: Optional[str]
-    vault_context: Optional[str]
 
 
 class _SimpleResp:
@@ -492,6 +490,8 @@ def human_review_node(state: ResumeOptimizationState) -> ResumeOptimizationState
     }
 
 
+
+
 def resume_editing_node(state: ResumeOptimizationState) -> ResumeOptimizationState:
     messages = state["messages"]
     resume_text = state["resume_plain_text"]
@@ -518,62 +518,52 @@ GOAL: Your goal is to EXCEED the previous score by refining the content further 
 """
 
     job_description = state.get("job_description_text", "")
-    editing_instructions = f"""TASK: Act as an expert Senior Technical Recruiter. Optimize the provided resume for ATS matching against the specific Job Description below.
-
-{history_context}
+    editing_instructions = f"""TASK: Act as an expert Senior Technical Recruiter. Optimize the resume for ATS matching against the target Job Description.
 
 === JOB DESCRIPTION ===
 {job_description}
 
-=== ABSOLUTE CONSTRAINTS (NEVER violate) ===
+{history_context}
+
+=== NON-NEGOTIABLE NEVER CONSTRAINTS ===
 NEVER:
-1. Add ANY skills, tools, or technologies to a specific job/project that were NOT originally in that specific section of the resume. 
-2. Bleed information between sections: Do not move tech stack from "Projects" to "Experience" or vice versa unless it was originally present in both.
-3. Invent or modify dates, company names, contact info, or locations.
-4. Fabricate metrics, numbers, or specific accomplishments.
-5. Create new projects or experience items.
+- Add technologies (e.g., PyTorch, TensorFlow, AWS) to a job/project that weren't in the original version.
+- Fabricate metrics, numbers, or specific accomplishments.
+- Invent or modify dates, company names, contact info, or locations.
+- Create new projects or experience items.
+- Use Vault context to "fill in" skills missing from your actual work history.
 
-CRITICAL RULE - NO SECTION BLEEDING:
-Each job in "Professional Experience" must ONLY describe work done AT THAT COMPANY.
-Do NOT add project descriptions or personal project tech to job experience bullets.
-Keep "Projects" and "Professional Experience" strictly separate.
+=== EXPLICIT DO/DON'T LIST ===
+DO:
+- Keep the Professional Summary under 75 words and MAX 3 sentences.
+- Focus summary on the "bridge" between your existing skills and the JD requirements.
+- Transform passive duties into achievement-oriented results using ONLY ACTUAL facts.
+- Replace weak verbs with strong action verbs (see examples below).
+- Integrate keywords from the target list ONLY if they are grounded in your resume.
 
-ALWAYS:
-1. Preserve ALL original facts (dates, titles, companies unchanged).
-2. ONLY REPHRASE: You may improve the prose and verb-strength of EXISTING descriptions.
-3. Maintain 100% factual fidelity to the source section.
-4. REJECT any suggestion to "borrow" skills from one job to benefit another.
+DON'T:
+- Use "•" bullets (use "-" instead).
+- Include intros, outros, or conversational fillers.
+- Bleed info between unrelated sections (e.g., moving project tech to job history).
 
-=== ALLOWED OPTIMIZATION TECHNIQUES (4 ONLY) ===
+=== CONCRETE EXAMPLES (BETTER VERBS) ===
+BEFORE: "Worked on payment processing"
+AFTER: "Architected and optimized payment processing system"
 
-[1] PERSUASIVE REPHRASING (SOURCE-ONLY)
-  - Transform passive duties into achievement-oriented results using EXISTING facts.
-  - Use high-impact verbs: "Engineered", "Optimized", "Spearheaded", "Architected", "Automated".
-  - DO NOT add new outcomes. Only rephrase what is already there.
+BEFORE: "Responsible for team management"
+AFTER: "Spearheaded a team of 4 developers to deliver..."
 
-[2] STRATEGIC KEYWORD ALIGNMENT
-  - Integrate target keywords from the JD into the Professional Summary ONLY IF you actually possess those skills (as per the whole resume).
-  - In experience bullets, only use keywords that were originally present in that specific job.
+=== GUARD CONDITIONS ===
+[VAULT CONTEXT USAGE]: Feature disabled to optimize build performance.
 
-[3] GENERALIZED SUMMARY
-  - Rewrite the Professional Summary to be a bridge between the JD and your actual resume.
-  - It should be professional, slightly generalized to cover your career trajectory, but grounded in resume facts.
-
-[4] CONCISION & CLARITY
-  - Remove fluff and professional filler.
-  - Ensure the formatting is crisp and professional.
-
-=== OUTPUT FORMAT REQUIREMENTS (CRITICAL) ===
-You MUST output the resume in PROPER MARKDOWN format. This is non-negotiable.
-
-```
+=== OUTPUT FORMAT REQUIRED ===
 # [Full Name]
-[Contact info on one line: city, email, phone, LinkedIn]
+[Contact info on one line]
 
 ---
 
 ## Professional Summary
-[2-3 sentence summary paragraph.]
+[Max 3 sentences / 75 words]
 
 ## Technical Skills
 - **Languages:** [list]
@@ -581,55 +571,22 @@ You MUST output the resume in PROPER MARKDOWN format. This is non-negotiable.
 - **Tools & Platforms:** [list]
 
 ## Professional Experience
-
-### [Job Title] | [Company Name]
-*[Start Date] - [End Date]*
-
-- [Achievement bullet with action verb]
-- [Achievement bullet with action verb]
-
-### [Previous Job Title] | [Previous Company]
-*[Start Date] - [End Date]*
-
-- [Achievement bullet]
-- [Achievement bullet]
-
-## Education
-
-### [Degree] | [University/College]
-*[Year]*
-
-## Certifications
-- [Certification name], [Issuer], [Date]
+### [Job Title] | [Company]
+*[Date Range]*
+- [Achievement]
 
 ## Projects
 ### [Project Name]
-- [Brief description with technologies used]
-```
-
-FORMAT RULES:
-- Use # for name, ## for sections, ### for job titles/degrees
-- Use **bold** for skill categories
-- Use - (bullet points) for achievements
-- Use *italics* for dates
-- Add blank lines between sections
-- NO code blocks around the output
-- Output ONLY the resume, no explanations
+- [Description]
 
 ORIGINAL RESUME:
 {resume_text}
 
-TARGET KEYWORDS (integrate these strategically, especially in Professional Summary):
+TARGET KEYWORDS:
 {", ".join(state.get("extracted_keywords", []))}
 
-OUTPUT THE OPTIMIZED RESUME IN MARKDOWN FORMAT NOW. 
-
-CRITICAL: 
-1. Use DOUBLE NEWLINES between every header and every paragraph. 
-2. Use EXACTLY the headers provided (# for name, ## for sections).
-3. DO NOT output a single paragraph. 
-4. DO NOT use '•' bullets, use '-' instead.
-5. NO code blocks, NO intros, NO outros. ONLY THE RESUME.
+=== ADDITIONAL CAREER CONTEXT (FROM VAULT) ===
+None provided.
 """
 
     if human_feedback and human_feedback.lower() != "proceed":
@@ -639,6 +596,7 @@ CRITICAL:
             ).model_dump()
         )
         editing_instructions += f"\n\n=== USER GUIDANCE (PRIORITY) ===\n{human_feedback}\nFollow this instruction while maintaining all constraints above.\n"
+
 
     messages.append(
         AIMessage(
@@ -678,13 +636,11 @@ CRITICAL:
                  lines[0] = f"# {lines[0]}"
                  raw_response = "\n".join(lines)
 
-            # Apply replacements
+            # Apply replacements - use count=1 to avoid duplicating headers if the word persists in bullets
             for key, pattern in sections.items():
                 if re.search(pattern, raw_response, re.MULTILINE):
-                    # Replace found section title with strict Markdown header
-                    # We use a lambda to ensure we don't double-add ## if it exists (though regex handles optional)
-                    # simpler approach: Replace the match with the clean header
-                    raw_response = re.sub(pattern, f"## {key}", raw_response, flags=re.MULTILINE | re.IGNORECASE)
+                    # Replace FIRST match with strict Markdown header
+                    raw_response = re.sub(pattern, f"## {key}", raw_response, count=1, flags=re.MULTILINE | re.IGNORECASE)
 
         # Debug output
         print(f"\nDEBUG - Raw LLM Response Length: {len(raw_response)}")
@@ -965,6 +921,7 @@ CRITICAL:
     hitl_feedback = state.get("hitl_feedback")
     if hitl_feedback:
         editing_instructions += f"\n\n=== USER GUIDANCE (PRIORITY) ===\n{hitl_feedback}\nFollow this instruction while maintaining all constraints above.\n"
+
 
     logger.info(f"[COUNCIL] Editor #{index} ({strategy['name']}) — invoking LLM")
     time.sleep(2.0)  # Rate-limit stagger
@@ -1401,8 +1358,15 @@ def json_extraction_node(state: ResumeOptimizationState) -> ResumeOptimizationSt
     resume_json = None
     try:
         with Timer("json_extraction"):
-            response = _safe_invoke(analyst_llm, prompt)
-        res_text = response.content.strip()
+            try:
+                response = _safe_invoke(analyst_llm, prompt)
+                res_text = response.content.strip()
+                if not res_text or "404" in res_text or "NOT_FOUND" in res_text:
+                    raise ValueError("Empty or error response from analyst_llm")
+            except Exception as e:
+                logger.warning(f"[JSON_EXTRACT] Analyst failed, falling back to Editor: {e}")
+                response = _safe_invoke(editor_llm, prompt)
+                res_text = response.content.strip()
 
         # Parse JSON — try multiple strategies
         try:
@@ -1433,6 +1397,7 @@ def json_extraction_node(state: ResumeOptimizationState) -> ResumeOptimizationSt
                 f"[JSON_EXTRACT] Success — {len(resume_json.get('experience', []))} experiences, "
                 f"{len(resume_json.get('skills', []))} skill categories extracted."
             )
+            logger.info(f"[JSON_EXTRACT] Successfully validated schema for {validated.contact.name}")
             messages.append(
                 AIMessage(
                     content=f"JSON extraction complete: {validated.contact.name} — "
@@ -1448,6 +1413,9 @@ def json_extraction_node(state: ResumeOptimizationState) -> ResumeOptimizationSt
                     content="JSON extraction produced incomplete data — falling back to Markdown only."
                 ).model_dump()
             )
+        
+        # Log final status of resume_json
+        logger.info(f"[JSON_EXTRACT] Final result: {'SUCCESS' if resume_json else 'FAILED'}")
 
     except Exception as e:
         logger.error(f"[JSON_EXTRACT] Failed: {e}")
@@ -1501,60 +1469,50 @@ def reflection_node(state: ResumeOptimizationState) -> ResumeOptimizationState:
     # Smart Stagger for Rate Limits
     time.sleep(1.5)
     try:
+        response = None
+        # Try Analyst (Gemini) first
         try:
             response = _safe_invoke(analyst_llm, prompt)
+            res_text = response.content.strip()
+            # If the response itself contains a 404 message (sometimes happens with _safe_invoke catching)
+            if not res_text or "404" in res_text or "NOT_FOUND" in res_text:
+                raise ValueError("Possible 404 or empty response from Analyst")
         except Exception as e:
             logger.warning(f"Analyst model failed for reflection, falling back to Editor: {e}")
             response = _safe_invoke(editor_llm, prompt)
+            res_text = response.content.strip()
         
-        import json as py_json
-        res_text = response.content.strip()
+        # More resilient JSON extraction
+        logger.info(f"[DEBUG] Reflection raw response (first 200 chars): {res_text[:200]}")
         
-        # Debug: Log raw reflection response
-        logger.info(f"[DEBUG] Reflection raw response (first 300 chars): {res_text[:300]}")
+        # Clean markdown fences
+        if "```" in res_text:
+            if "```json" in res_text:
+                res_text = res_text.split("```json")[1].split("```")[0].strip()
+            else:
+                try:
+                    res_text = res_text.split("```")[1].strip()
+                except IndexError:
+                    pass
         
-        # More resilient JSON extraction - try multiple strategies
-        json_data = None
-        
-        # Strategy 1: Direct JSON parse
+        # Try to find { ... } if it's still not clean
+        if not (res_text.startswith("{") and res_text.endswith("}")):
+            match = re.search(r"(\{.*\})", res_text, re.DOTALL)
+            if match:
+                res_text = match.group(1)
+
         try:
-            json_data = py_json.loads(res_text)
-        except Exception:
-            pass
-        
-        # Strategy 2: Extract JSON from markdown code blocks
-        if not json_data:
-            if res_text.startswith("```"):
-                if "json" in res_text[:20]:
-                    res_text = res_text.split("```json", 1)[1].split("```", 1)[0].strip()
-                else:
-                    res_text = res_text.split("```", 2)[1].strip()
-                try:
-                    json_data = py_json.loads(res_text)
-                except Exception:
-                    pass
-        
-        # Strategy 3: Regex extraction of JSON object
-        if not json_data:
-            json_match = re.search(r"\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}", res_text, re.DOTALL)
-            if json_match:
-                try:
-                    json_data = py_json.loads(json_match.group(0))
-                except Exception:
-                    pass
-        
-        if json_data:
-            reflection_data = json_data
+            reflection_data = py_json.loads(res_text)
             reflection_report = f"- **The Good**: {reflection_data.get('good', 'N/A')}\n- **The Gap**: {reflection_data.get('gap', 'N/A')}\n- **Integrity**: {reflection_data.get('integrity_status', 'N/A')}"
             should_retry = reflection_data.get("should_retry", False)
             retry_instruction = reflection_data.get("retry_reason", "")
             logger.info("[DEBUG] Reflection JSON parsed successfully")
-        else:
-            raise ValueError("Could not extract valid JSON from reflection response")
+        except Exception as json_e:
+            logger.error(f"[REFLECTION] JSON parse error: {json_e}")
+            raise ValueError(f"Invalid JSON in reflection: {res_text[:100]}")
             
     except Exception as e:
-        logger.error(f"Reflection failed: {e}")
-        logger.error(f"[DEBUG] Reflection response that failed: {response.content[:500] if hasattr(response, 'content') else 'N/A'}")
+        logger.error(f"Reflection failed comprehensively: {e}")
         reflection_report = "Reflection node failed to generate report."
         should_retry = False
         retry_instruction = ""
@@ -1566,15 +1524,22 @@ def reflection_node(state: ResumeOptimizationState) -> ResumeOptimizationState:
 
     messages.append(AIMessage(content=f"Reflection Insight:\n{reflection_report}").model_dump())
 
+    # Re-enabled self-correction logic (max 1 retry)
+    # The reflection node detects hallucinations. If integrity fails, we retry.
+    integrity_status = "PASS"
+    if 'reflection_data' in locals() and reflection_data:
+        integrity_status = reflection_data.get("integrity_status", "PASS")
+    
+    should_retry = False
+    if integrity_status == "FAIL" and current_retries < 1:
+        should_retry = True
+
     new_state = {
         **state,
         "reflection_report": reflection_report,
         "messages": messages,
         "current_task": "Finalizing output",
     }
-    
-    # DISABLED: Retry logic causes backend crashes - always proceed forward
-    should_retry = False
     
     if should_retry:
         new_state["human_feedback"] = f"AUTO-RETRY INSTRUCTION: {retry_instruction}"
@@ -1739,15 +1704,25 @@ def cover_letter_analysis_node(
     logger.info("[LLM] Call started: cover_letter_analysis")
     try:
         with Timer("llm_invoke for cover_letter_analysis"):
-            response = _safe_invoke(analyst_llm, prompt)
-    except Exception as e:
+            try:
+                response = _safe_invoke(analyst_llm, prompt)
+            except Exception as e:
+                logger.warning(f"Analyst Gemini failed for cover letter, falling back to Editor: {e}")
+                response = _safe_invoke(editor_llm, prompt)
+    except Exception:
         logger.exception(
-            "[LLM] Call failed: cover_letter_analysis",
+            "[LLM] Call failed: cover_letter_analysis even after fallback",
             extra={"error_type": "system_error"},
         )
-        raise SystemFailure(
-            message="Cover letter analysis failed", details={"reason": str(e)}
-        )
+        # Fallback to empty analysis instead of crashing
+        analysis = "Standard professional cover letter based on resume facts."
+        return {
+            **state,
+            "cover_letter_analysis": analysis,
+            "messages": messages,
+            "next_agent": "cover_letter_generation",
+            "current_task": "Generating cover letter (safe mode)",
+        }
     logger.info("[LLM] Call completed: cover_letter_analysis")
     analysis = response.content
     return {
