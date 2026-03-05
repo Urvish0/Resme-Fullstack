@@ -1,10 +1,9 @@
 import json
 import urllib.request
 from typing import Optional
-from fastapi import Request, HTTPException, Security
+from fastapi import HTTPException, Security
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from jose import jwt, jwk
-from jose.utils import base64url_decode
+from jose import jwt
 from app.core.config import settings
 import logging
 

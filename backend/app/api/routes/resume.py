@@ -1,7 +1,6 @@
 from fastapi import (
     APIRouter,
     HTTPException,
-    Request,
     Header,
     Query,
     UploadFile,
@@ -19,6 +18,7 @@ import tempfile
 import os
 import requests
 from bs4 import BeautifulSoup
+from app.core.limiter import limiter
 
 from ...schemas.resume import ResumeOptimizeRequest, ResumeOptimizeResponse
 from ...services.workflow_service import stream_resume_workflow
@@ -26,7 +26,6 @@ from ...utils.token_guard import enforce_payload_limit
 from ..deps import get_current_user
 from ...utils.token_utils import enforce_token_limit
 from ...core.model_limits import MODEL_LIMITS
-from ...services.rate_limiter import is_rate_limited
 from ...services.workflow_service import run_resume_workflow, resume_workflow_with_feedback
 from ...utils.cache import (
     make_cache_key,
@@ -74,8 +73,6 @@ MODEL_NAME = "llama-3.1-8b-instant"
 LIMITS = MODEL_LIMITS[MODEL_NAME]
 MAX_INPUT = LIMITS["max_input_tokens"] - LIMITS["safety_margin"]
 
-from app.core.limiter import limiter
-
 router = APIRouter(prefix="/optimize", tags=["Resume"])
 
 
@@ -83,12 +80,9 @@ router = APIRouter(prefix="/optimize", tags=["Resume"])
 @limiter.limit("5/minute")
 def optimize_resume(
     payload: ResumeOptimizeRequest, 
-    request: Request,
     user_id: str = Depends(get_current_user)
 ):
     logger.info(f"[API] Optimize resume request started by {user_id}")
-
-    client_ip = request.client.host
 
 
     cache_payload = {
@@ -183,12 +177,9 @@ def optimize_resume(
 @limiter.limit("5/minute")
 def optimize_resume_stream(
     payload: ResumeOptimizeRequest, 
-    request: Request,
     user_id: str = Depends(get_current_user)
 ):
     logger.info(f"[API] Stream optimize resume request started by {user_id}")
-
-    client_ip = request.client.host
 
     def event_generator():
         # Pre-flight token guard
@@ -227,19 +218,15 @@ class OptimizeAsyncRequest(BaseModel):
     cold_email_target_role: Optional[str] = None
 
 
-from fastapi import Depends
-from app.api.deps import get_current_user
-
 @router.post("/async")
 @limiter.limit("10/minute")
 def optimize_resume_async(
     payload: OptimizeAsyncRequest,
-    request: Request,
     idempotency_key: str = Header(..., alias="Idempotency-Key"),
     retry: bool = Query(False),
     user_id: str = Depends(get_current_user),
 ):
-    request_id = getattr(request.state, "request_id", None)
+    request_id = None
 
     logger.info(
         f"[API] Async optimize request received by {user_id}",
