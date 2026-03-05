@@ -3,6 +3,7 @@ from fastapi import (
     HTTPException,
     Header,
     Query,
+    Request,
     UploadFile,
     File,
     Depends,
@@ -79,6 +80,7 @@ router = APIRouter(prefix="/optimize", tags=["Resume"])
 @router.post("", response_model=ResumeOptimizeResponse)
 @limiter.limit("5/minute")
 def optimize_resume(
+    request: Request,
     payload: ResumeOptimizeRequest, 
     user_id: str = Depends(get_current_user)
 ):
@@ -176,6 +178,7 @@ def optimize_resume(
 @router.post("/stream")  # For SSE streaming (server sent event)
 @limiter.limit("5/minute")
 def optimize_resume_stream(
+    request: Request,
     payload: ResumeOptimizeRequest, 
     user_id: str = Depends(get_current_user)
 ):
@@ -221,6 +224,7 @@ class OptimizeAsyncRequest(BaseModel):
 @router.post("/async")
 @limiter.limit("10/minute")
 def optimize_resume_async(
+    request: Request,
     payload: OptimizeAsyncRequest,
     idempotency_key: str = Header(..., alias="Idempotency-Key"),
     retry: bool = Query(False),
