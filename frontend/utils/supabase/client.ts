@@ -5,9 +5,13 @@ export function createClient() {
   const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
 
   if (!supabaseUrl || !supabaseAnonKey) {
-    // During Docker build / static generation, env vars may not be available.
-    // Return a no-op proxy that won't crash but also won't do anything.
-    // The real client is only created at runtime in the browser.
+    if (typeof window !== "undefined") {
+      console.error(
+        "Supabase environment variables are missing! " +
+        "Ensure NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY " +
+        "are set as BUILD-TIME environment variables."
+      )
+    }
     return null as any
   }
 
