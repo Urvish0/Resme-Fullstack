@@ -6,29 +6,31 @@ export function createClient() {
 
   // Diagnostic logging for build-time variables
   if (typeof window !== "undefined") {
-    const isUrlSet = !!supabaseUrl && supabaseUrl !== "undefined";
-    const isKeySet = !!supabaseAnonKey && supabaseAnonKey !== "undefined";
+    const isUrlSet = !!supabaseUrl && supabaseUrl !== "undefined" && supabaseUrl !== "";
+    const isKeySet = !!supabaseAnonKey && supabaseAnonKey !== "undefined" && supabaseAnonKey !== "";
     
     if (!isUrlSet || !isKeySet) {
       console.error(
         `[Supabase Client] Environment variables missing!
-         URL present: ${isUrlSet} 
-         Key present: ${isKeySet}
-         Value of URL (masked): ${supabaseUrl ? supabaseUrl.substring(0, 10) + "..." : "missing"}
+         URL present: ${isUrlSet} (Value length: ${supabaseUrl?.length || 0})
+         Key present: ${isKeySet} (Value length: ${supabaseAnonKey?.length || 0})
          
-         IMPORTANT: If you see "false" or "undefined" above, you must add these as 
-         DOCKER BUILD ARGS in the Render dashboard (Settings -> Advanced).`
+         Vercel Fix:
+         1. Go to Vercel -> Settings -> Environment Variables.
+         2. Ensure keys match EXACTLY: NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY.
+         3. Ensure "Environment" checkboxes (Production, Preview, Development) are ALL checked.
+         4. Trigger a NEW DEPLOYMENT (Redeploy with "Clear Build Cache").`
       );
     }
   }
 
-  if (!supabaseUrl || supabaseUrl === "undefined" || !supabaseAnonKey || supabaseAnonKey === "undefined") {
-    // Return a dummy client that provides useful errors instead of crashing with TypeError
+  if (!supabaseUrl || supabaseUrl === "undefined" || supabaseUrl === "" || !supabaseAnonKey || supabaseAnonKey === "undefined" || supabaseAnonKey === "") {
+    // Return a dummy client to prevent crash
     return {
       auth: {
-        getSession: async () => ({ data: { session: null }, error: new Error("Supabase URL is missing. Check Build Args.") }),
+        getSession: async () => ({ data: { session: null }, error: new Error("Supabase URL missing. Check Vercel Environment Variables.") }),
         onAuthStateChange: () => ({ data: { subscription: { unsubscribe: () => {} } } }),
-        signInWithOAuth: async () => ({ error: new Error("Auth unavailable: Supabase URL is missing during build.") }),
+        signInWithOAuth: async () => ({ error: new Error("Auth unavailable: Supabase keys missing during build.") }),
         signOut: async () => {},
         getUser: async () => ({ data: { user: null }, error: null }),
       },
