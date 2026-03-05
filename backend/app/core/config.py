@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     # Supabase
     supabase_url: str | None = Field(None, env="SUPABASE_URL")
     supabase_service_role_key: str | None = Field(None, env="SUPABASE_SERVICE_ROLE_KEY")
+    supabase_jwt_secret: str | None = Field(None, env="SUPABASE_JWT_SECRET")
 
     # Council of Agents
     enable_council_mode: bool = Field(True, env="ENABLE_COUNCIL_MODE")

@@ -267,6 +267,15 @@ def resume_workflow_with_feedback(thread_id: str, feedback: str) -> dict:
         f"New ATS: {new_ats_score}"
     )
 
+    # 3.6. Persist to Supabase (Long-Term Memory)
+    user_id = final_state.get("user_id", "default_user")
+    SupabaseService.save_resume_version(
+        user_id=user_id,
+        content=optimized_resume,
+        score=new_ats_score,
+        keywords=extracted_keywords
+    )
+
     return {
         "optimized_resume": optimized_resume,
         "cover_letter": cover_letter,
@@ -334,7 +343,7 @@ def stream_resume_workflow(
             if step.get("event") == "final_result":
                 final_result = step.get("data")
 
-        # 4. Save to redis
+        # 4. Save to redis and Supabase
         if final_result:
             redis_client.setex(
                 cache_key,
@@ -342,6 +351,16 @@ def stream_resume_workflow(
                 json.dumps(final_result),
             )
             logger.info("[CACHE] Saved final result")
+
+            # 4.5. Persist to Supabase
+            user_id = initial_state.get("user_id", "default_user")
+            SupabaseService.save_resume_version(
+                user_id=user_id,
+                content=final_result.get("optimized_resume", ""),
+                score=final_result.get("new_ats_score"),
+                keywords=final_result.get("extracted_keywords", [])
+            )
+            logger.info("[WORKFLOW] Persisted streaming result to Supabase")
 
     except Exception as e:
         logger.exception(

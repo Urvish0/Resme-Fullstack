@@ -113,3 +113,5 @@ zstandard
 weasyprint==68.1
 google-genai
 langchain-google-genai
+slowapi
+python-jose[cryptography]

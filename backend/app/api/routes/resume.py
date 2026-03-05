@@ -6,6 +6,7 @@ from fastapi import (
     Query,
     UploadFile,
     File,
+    Depends,
 )
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -22,6 +23,7 @@ from bs4 import BeautifulSoup
 from ...schemas.resume import ResumeOptimizeRequest, ResumeOptimizeResponse
 from ...services.workflow_service import stream_resume_workflow
 from ...utils.token_guard import enforce_payload_limit
+from ..deps import get_current_user
 from ...utils.token_utils import enforce_token_limit
 from ...core.model_limits import MODEL_LIMITS
 from ...services.rate_limiter import is_rate_limited
@@ -72,20 +74,22 @@ MODEL_NAME = "llama-3.1-8b-instant"
 LIMITS = MODEL_LIMITS[MODEL_NAME]
 MAX_INPUT = LIMITS["max_input_tokens"] - LIMITS["safety_margin"]
 
+from app.core.limiter import limiter
+
 router = APIRouter(prefix="/optimize", tags=["Resume"])
 
 
 @router.post("", response_model=ResumeOptimizeResponse)
-def optimize_resume(payload: ResumeOptimizeRequest, request: Request):
-    logger.info("[API] Optimize resume request started")
+@limiter.limit("5/minute")
+def optimize_resume(
+    payload: ResumeOptimizeRequest, 
+    request: Request,
+    user_id: str = Depends(get_current_user)
+):
+    logger.info(f"[API] Optimize resume request started by {user_id}")
 
     client_ip = request.client.host
 
-    if is_rate_limited(client_ip):
-        logger.warning(f"[API] Rate limit exceeded for IP: {client_ip}")
-        raise HTTPException(
-            status_code=429, detail="Too many requests. Please try again later."
-        )
 
     cache_payload = {
         "resume": payload.resume_text,
@@ -112,6 +116,7 @@ def optimize_resume(payload: ResumeOptimizeRequest, request: Request):
         "job_description_raw": job_description,
         "resume_raw_content": resume_text,
         "resume_format": payload.resume_format,
+        "user_id": user_id,
     }
 
     with Timer("workflow_execution"):
@@ -175,16 +180,15 @@ def optimize_resume(payload: ResumeOptimizeRequest, request: Request):
 
 
 @router.post("/stream")  # For SSE streaming (server sent event)
-def optimize_resume_stream(payload: ResumeOptimizeRequest, request: Request):
-    logger.info("[API] Stream optimize resume request started")
+@limiter.limit("5/minute")
+def optimize_resume_stream(
+    payload: ResumeOptimizeRequest, 
+    request: Request,
+    user_id: str = Depends(get_current_user)
+):
+    logger.info(f"[API] Stream optimize resume request started by {user_id}")
 
     client_ip = request.client.host
-
-    if is_rate_limited(client_ip):
-        logger.warning(f"[API] Stream rate limit exceeded for IP: {client_ip}")
-        raise HTTPException(
-            status_code=429, detail="Too many requests. Please try again later."
-        )
 
     def event_generator():
         # Pre-flight token guard
@@ -192,6 +196,7 @@ def optimize_resume_stream(payload: ResumeOptimizeRequest, request: Request):
             "job_description_raw": enforce_payload_limit(payload.job_description),
             "resume_raw_content": enforce_payload_limit(payload.resume_text),
             "resume_format": payload.resume_format,
+            "user_id": user_id,
         }
 
         # Stream workflow steps
@@ -222,17 +227,22 @@ class OptimizeAsyncRequest(BaseModel):
     cold_email_target_role: Optional[str] = None
 
 
+from fastapi import Depends
+from app.api.deps import get_current_user
+
 @router.post("/async")
+@limiter.limit("10/minute")
 def optimize_resume_async(
     payload: OptimizeAsyncRequest,
     request: Request,
     idempotency_key: str = Header(..., alias="Idempotency-Key"),
     retry: bool = Query(False),
+    user_id: str = Depends(get_current_user),
 ):
     request_id = getattr(request.state, "request_id", None)
 
     logger.info(
-        "[API] Async optimize request received",
+        f"[API] Async optimize request received by {user_id}",
         extra={"request_id": request_id},
     )
 
@@ -247,12 +257,12 @@ def optimize_resume_async(
 
         if status == JobStatus.FAILED and retry:
             logger.info(
-                f"[RETRY] Retrying failed job {parent_job_id}",
+                f"[RETRY] Retrying failed job {parent_job_id} for user {user_id}",
                 extra={"request_id": request_id},
             )
         else:
             logger.info(
-                "[IDEMPOTENCY] Replay detected",
+                f"[IDEMPOTENCY] Replay detected for user {user_id}",
                 extra={"request_id": request_id},
             )
             return {
@@ -278,6 +288,7 @@ def optimize_resume_async(
         "job_description_raw": payload.job_description,
         "resume_raw_content": payload.resume_text,
         "resume_format": payload.resume_format,
+        "user_id": user_id,
     }
 
     # Store initial idempotency state
@@ -473,7 +484,10 @@ def optimize_resume_async(
 
 
 @router.get("/status/{job_id}")
-def get_async_status(job_id: str):
+def get_async_status(
+    job_id: str,
+    user_id: str = Depends(get_current_user)
+):
     job = get_job_status(job_id)
 
     if not job:
@@ -487,7 +501,11 @@ class HITLFeedbackRequest(BaseModel):
 
 
 @router.post("/feedback/{job_id}")
-def submit_hitl_feedback(job_id: str, payload: HITLFeedbackRequest):
+def submit_hitl_feedback(
+    job_id: str, 
+    payload: HITLFeedbackRequest,
+    user_id: str = Depends(get_current_user)
+):
     """
     Phase 6.2 HITL: Submit user feedback to resume a paused workflow.
     The workflow was interrupted at human_review_node and is waiting
@@ -590,6 +608,7 @@ def submit_hitl_feedback(job_id: str, payload: HITLFeedbackRequest):
 def download_resume_pdf(
     job_id: str,
     template: str = Query("modern", enum=["modern", "classic", "minimalist"]),
+    user_id: str = Depends(get_current_user)
 ):
     """
     Download the optimized resume as a styled PDF.

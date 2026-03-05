@@ -48,17 +48,34 @@ export type JobStatusResponse = {
     error?: string
 }
 
+import { createClient } from "@/utils/supabase/client";
+
+const supabase = createClient();
+
+async function getAuthHeaders(additionalHeaders: Record<string, string> = {}): Promise<Record<string, string>> {
+    const { data: { session } } = await supabase.auth.getSession();
+    const token = session?.access_token;
+    
+    const headers: Record<string, string> = { ...additionalHeaders };
+    if (token) {
+        headers["Authorization"] = `Bearer ${token}`;
+    }
+    return headers;
+}
+
 // Submit async optimization job
 export async function optimizeResumeAsync(
     payload: OptimizeRequestExtended,
     idempotencyKey: string
 ): Promise<OptimizeAsyncResponse> {
+    const headers = await getAuthHeaders({
+        "Content-Type": "application/json",
+        "Idempotency-Key": idempotencyKey,
+    });
+    
     const res = await fetch(`${API_BASE_URL}/optimize/async`, {
         method: "POST",
-        headers: {
-            "Content-Type": "application/json",
-            "Idempotency-Key": idempotencyKey,
-        },
+        headers,
         body: JSON.stringify(payload),
     });
 
@@ -73,7 +90,10 @@ export async function optimizeResumeAsync(
 export async function getJobStatus(
     jobId: string
 ): Promise<JobStatusResponse>{
+    const headers = await getAuthHeaders();
     const res = await fetch(`${API_BASE_URL}/optimize/status/${jobId}`, {
+        method: "GET",
+        headers,
         cache: "no-store",
     })
     
@@ -89,8 +109,10 @@ export async function uploadResumeFile(file: File): Promise<{ filename: string; 
     const formData = new FormData();
     formData.append("file", file);
 
+    const headers = await getAuthHeaders();
     const res = await fetch(`${API_BASE_URL}/optimize/upload`, {
         method: "POST",
+        headers,
         body: formData,
     });
 
@@ -108,11 +130,12 @@ export async function uploadResumeFile(file: File): Promise<{ filename: string; 
 
 // Fetch JD from URL
 export async function fetchJDFromUrl(url: string): Promise<{ job_description: string }> {
+    const headers = await getAuthHeaders({
+        "Content-Type": "application/json",
+    });
     const res = await fetch(`${API_BASE_URL}/optimize/jd-from-url`, {
         method: "POST",
-        headers: {
-            "Content-Type": "application/json",
-        },
+        headers,
         body: JSON.stringify({ url }),
     });
 
@@ -129,8 +152,10 @@ export async function downloadResumePDF(
     jobId: string,
     template: "modern" | "classic" | "minimalist" = "modern"
 ): Promise<void> {
+    const headers = await getAuthHeaders();
     const res = await fetch(
-        `${API_BASE_URL}/optimize/pdf/${jobId}?template=${template}`
+        `${API_BASE_URL}/optimize/pdf/${jobId}?template=${template}`,
+        { headers }
     );
 
     if (!res.ok) {
@@ -164,11 +189,12 @@ export async function submitHITLFeedback(
     jobId: string,
     feedback: string
 ): Promise<{ job_id: string; status: string; message: string }> {
+    const headers = await getAuthHeaders({
+        "Content-Type": "application/json",
+    });
     const res = await fetch(`${API_BASE_URL}/optimize/feedback/${jobId}`, {
         method: "POST",
-        headers: {
-            "Content-Type": "application/json",
-        },
+        headers,
         body: JSON.stringify({ feedback }),
     });
 
